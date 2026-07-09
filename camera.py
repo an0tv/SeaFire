@@ -1,8 +1,14 @@
 """
-Camera capture via FFmpeg/V4L2 with ring buffer and delta spike detection.
+Camera capture via FFmpeg with ring buffer and delta spike detection.
+
+Platform support:
+  - Linux:   V4L2 input  (via ffmpeg -f v4l2)
+  - macOS:   AVFoundation input (via ffmpeg -f avfoundation)
 """
 
 import os
+import platform
+import re
 import select
 import signal
 import subprocess
@@ -11,8 +17,13 @@ from collections import deque
 from threading import Event, Thread
 from typing import Callable, List, Optional, Tuple
 
+# ── Platform detection ────────────────────────────────────────────────────────
+
+IS_MACOS = platform.system() == "Darwin"
+
 import cv2
 import numpy as np
+
 from config import (
     BASELINE_LEAK_SEC,
     CAM_AUTO_EXPOSURE,
@@ -37,7 +48,42 @@ from config import (
 # ── Camera discovery ────────────────────────────────────────────────────────
 
 
-def find_cameras() -> List[str]:
+def _find_cameras_macos() -> List[str]:
+    """Find Arducam / USB camera devices via FFmpeg AVFoundation on macOS."""
+    try:
+        out = subprocess.run(
+            ["ffmpeg", "-f", "avfoundation", "-list_devices", "true", "-i", ""],
+            capture_output=True,
+            timeout=10,
+            text=True,
+        )
+        stderr = out.stderr  # ffmpeg lists devices on stderr
+    except Exception as e:
+        print(f"ffmpeg AVFoundation not available: {e}")
+        return []
+
+    devices: List[str] = []
+    # Lines look like: "[AVFoundation indev @ 0x...] [0] FaceTime HD Camera"
+    in_video_section = False
+    for line in stderr.splitlines():
+        if "AVFoundation video devices:" in line:
+            in_video_section = True
+            continue
+        if "AVFoundation audio devices:" in line:
+            in_video_section = False
+            continue
+        if in_video_section:
+            m = re.search(r"\[(\d+)\]\s+(.+)", line)
+            if m:
+                idx = m.group(1)
+                name = m.group(2)
+                # Match Arducam or USB cameras (same filter as Linux version)
+                if "Arducam" in name or ("USB" in name and "Camera" in name):
+                    devices.append(idx)
+    return devices[:2]
+
+
+def _find_cameras_linux() -> List[str]:
     """Find USB camera video capture devices via v4l2-ctl."""
     try:
         out = subprocess.run(
@@ -61,11 +107,26 @@ def find_cameras() -> List[str]:
     return [d for d in devices if os.path.exists(d)][:2]
 
 
-# ── V4L2 controls ───────────────────────────────────────────────────────────
+def find_cameras() -> List[str]:
+    """Find camera devices for the current platform."""
+    if IS_MACOS:
+        return _find_cameras_macos()
+    return _find_cameras_linux()
+
+
+# ── Camera controls ──────────────────────────────────────────────────────────
 
 
 def apply_camera_settings(device: str):
-    """Apply V4L2 controls to a camera device for dark-field imaging."""
+    """Apply camera controls.
+
+    On Linux this uses v4l2-ctl for dark-field imaging.
+    On macOS, V4L2 controls are not available — prints a notice.
+    """
+    if IS_MACOS:
+        print(f"[ctl] {device}: camera controls not available on macOS (V4L2)")
+        return
+
     ctrls = [
         ("auto_exposure", CAM_AUTO_EXPOSURE),
         ("exposure_time_absolute", CAM_EXPOSURE_ABSOLUTE),
@@ -221,42 +282,71 @@ class Camera:
 
     def _run(self):
         # Get camera label for logging
-        try:
-            label = subprocess.check_output(
-                ["v4l2-ctl", "--device", self.device, "--all"],
-                stderr=subprocess.DEVNULL,
-            ).decode(errors="replace")
-            for line in label.splitlines():
-                if "Card" in line:
-                    label = line.strip()
-        except Exception:
-            label = self.device
-        print(f"[cam{self.cam_id}] {self.device}: {label}")
+        label = self.device
+        if IS_MACOS:
+            # On macOS we don't have v4l2-ctl; just use the index as label
+            print(f"[cam{self.cam_id}] AVFoundation device index {self.device}")
+        else:
+            try:
+                cam_label = subprocess.check_output(
+                    ["v4l2-ctl", "--device", self.device, "--all"],
+                    stderr=subprocess.DEVNULL,
+                ).decode(errors="replace")
+                for line in cam_label.splitlines():
+                    if "Card" in line:
+                        label = line.strip()
+            except Exception:
+                pass
+            print(f"[cam{self.cam_id}] {self.device}: {label}")
 
-        # Apply V4L2 controls for dark-field imaging
+        # Apply camera controls
         apply_camera_settings(self.device)
 
-        # FFmpeg: V4L2 → full-res gray8 rawvideo → pipe
-        cmd = [
-            "ffmpeg",
-            "-f",
-            "v4l2",
-            "-video_size",
-            f"{WIDTH}x{HEIGHT}",
-            "-framerate",
-            str(FPS),
-            "-i",
-            self.device,
-            "-vf",
-            "format=gray",
-            "-c:v",
-            "rawvideo",
-            "-pix_fmt",
-            "gray",
-            "-f",
-            "rawvideo",
-            "pipe:1",
-        ]
+        # FFmpeg: camera → full-res gray8 rawvideo → pipe
+        if IS_MACOS:
+            # macOS: AVFoundation input
+            cmd = [
+                "ffmpeg",
+                "-f",
+                "avfoundation",
+                "-video_size",
+                f"{WIDTH}x{HEIGHT}",
+                "-framerate",
+                str(FPS),
+                "-i",
+                self.device,
+                "-vf",
+                "format=gray",
+                "-c:v",
+                "rawvideo",
+                "-pix_fmt",
+                "gray",
+                "-f",
+                "rawvideo",
+                "pipe:1",
+            ]
+        else:
+            # Linux: V4L2 input
+            cmd = [
+                "ffmpeg",
+                "-f",
+                "v4l2",
+                "-video_size",
+                f"{WIDTH}x{HEIGHT}",
+                "-framerate",
+                str(FPS),
+                "-i",
+                self.device,
+                "-vf",
+                "format=gray",
+                "-c:v",
+                "rawvideo",
+                "-pix_fmt",
+                "gray",
+                "-f",
+                "rawvideo",
+                "pipe:1",
+            ]
         self._proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,

@@ -24,10 +24,12 @@ Env vars:
   CAM_WHITE_BALANCE_AUTOMATIC  0=off, 1=on (default 0)
 """
 
+import os
 import signal
 import sys
 import time
 from http.server import HTTPServer
+from socket import SOL_SOCKET, SO_REUSEADDR, SO_REUSEPORT
 from threading import Event, Thread
 from typing import Dict, List, Optional
 
@@ -56,19 +58,23 @@ from config import (
 from preview import _preview_thread, _PreviewHandler
 from recorder import EventRecorder
 
+
 # ── FPS status thread ──────────────────────────────────────────────────────
 
 
 def _fps_status(cameras: Dict[int, Camera], stop: Event):
     """Print periodic FPS for each running camera."""
-    prev = {cam_id: 0 for cam_id in cameras}
+    prev: Dict[int, int] = {}
     prev_time = time.monotonic()
     while not stop.is_set():
-        time.sleep(10)
+        if stop.wait(2.0):
+            return
         now = time.monotonic()
         elapsed = now - prev_time
         parts = []
         for cam_id, c in list(cameras.items()):
+            if cam_id not in prev:
+                prev[cam_id] = 0
             if c.alive:
                 delta = c.frame_count - prev[cam_id]
                 fps_val = delta / elapsed if elapsed > 0 else 0
@@ -79,6 +85,29 @@ def _fps_status(cameras: Dict[int, Camera], stop: Event):
             prev[cam_id] = c.frame_count
         prev_time = now
         print(f"[FPS] {'  |  '.join(parts)}")
+
+
+# ── Shutdown helpers ───────────────────────────────────────────────────────
+
+
+def _kill_ffmpeg(cameras: Dict[int, Camera]):
+    for c in cameras.values():
+        proc = getattr(c, "_proc", None)
+        if proc and proc.poll() is None:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                pass
+
+
+def _stop_cameras(cameras: Dict[int, Camera]):
+    threads = []
+    for c in list(cameras.values()):
+        t = Thread(target=c.stop, daemon=True)
+        t.start()
+        threads.append(t)
+    for t in threads:
+        t.join(timeout=3)
 
 
 # ── Main ────────────────────────────────────────────────────────────────────
@@ -114,55 +143,52 @@ def main():
         sys.exit(1)
     print(f"Found {len(devs)} camera(s): {devs}")
 
-    # Create event recorder (shared across cameras)
+    # Start cameras
     cameras: Dict[int, Camera] = {}
     recorder = EventRecorder(cameras)
-
-    # Start cameras (callback triggers recorder on event)
     for i, cam_dev in enumerate(devs):
         cam = Camera(cam_dev, i, on_event=recorder.trigger)
         cameras[i] = cam
         cam.start()
-        time.sleep(0.5)  # stagger to avoid USB contention
-    print(f"{len(cameras)} camera(s) running. Ctrl+C to stop.")
-
-    # Update recorder's camera ref after creation
+        time.sleep(0.5)
     recorder._cameras = cameras
 
-    # Preview thread + HTTP server
+    # Preview server
     _stop = Event()
     preview_server: Optional[HTTPServer] = None
-
     if PREVIEW_PORT > 0:
         Thread(target=_preview_thread, args=(cameras, _stop), daemon=True).start()
         preview_server = HTTPServer(("0.0.0.0", PREVIEW_PORT), _PreviewHandler)
+        # Allow immediate rebind on macOS after a crash
+        preview_server.socket.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
+        preview_server.socket.setsockopt(SOL_SOCKET, SO_REUSEPORT, 1)
         Thread(target=preview_server.serve_forever, daemon=True).start()
         print(f"[preview] HTTP MJPEG at http://0.0.0.0:{PREVIEW_PORT}")
 
-    # FPS status thread
+    print(f"{len(cameras)} camera(s) running. Ctrl+C to stop.")
+
+    # FPS status
     Thread(target=_fps_status, args=(cameras, _stop), daemon=True).start()
 
-    def shutdown(sig, frame):  # type: ignore[reportUnusedParameter]
-        if getattr(shutdown, "_fired", False):
-            return
-        shutdown._fired = True  # type: ignore[reportFunctionMemberAccess]
-        print("\nShutting down...")
+    # Handle SIGTERM (used by systemd / docker)
+    def _sigterm(sig, frame):
         _stop.set()
 
-    signal.signal(signal.SIGINT, shutdown)
-    signal.signal(signal.SIGTERM, shutdown)
+    signal.signal(signal.SIGTERM, _sigterm)
 
-    # Restart loop
-    fail_count = {i: 0 for i in cameras}
-    next_restart: Dict[int, float] = {i: 0 for i in cameras}
-    while not _stop.is_set():
-        _stop.wait(1.0)  # returns immediately when stop is set
-        now = time.monotonic()
-        for cam_id, c in list(cameras.items()):
-            if not c.alive and not _stop.is_set():
-                if now < next_restart[cam_id]:
+    # ── Main loop ──────────────────────────────────────────────────────────
+    try:
+        fail_count: Dict[int, int] = {}
+        next_restart: Dict[int, float] = {}
+        while not _stop.is_set():
+            _stop.wait(1.0)
+            now = time.monotonic()
+            for cam_id, c in list(cameras.items()):
+                if c.alive or _stop.is_set():
                     continue
-                fail_count[cam_id] += 1
+                if now < next_restart.get(cam_id, 0):
+                    continue
+                fail_count[cam_id] = fail_count.get(cam_id, 0) + 1
                 if fail_count[cam_id] > 5:
                     print(f"[cam{cam_id}] failed too many times, giving up")
                     del cameras[cam_id]
@@ -174,17 +200,15 @@ def main():
                     if not _stop.is_set():
                         c.start()
 
-    # Stop all cameras in parallel
-    stop_threads = []
-    for c in list(cameras.values()):
-        t = Thread(target=c.stop, daemon=True)
-        t.start()
-        stop_threads.append(t)
-    for t in stop_threads:
-        t.join(timeout=5)
-    if preview_server:
-        preview_server.shutdown()
-    print("Exit")
+    except KeyboardInterrupt:
+        print("\nShutting down...")
+        _stop.set()
+    finally:
+        _kill_ffmpeg(cameras)
+        _stop_cameras(cameras)
+        if preview_server:
+            preview_server.shutdown()
+        print("Exit")
 
 
 if __name__ == "__main__":
