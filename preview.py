@@ -7,7 +7,7 @@ import io
 import time
 from http.server import BaseHTTPRequestHandler
 from threading import Event, Lock
-from typing import Dict
+from typing import Dict, Optional
 
 from camera import Camera
 from config import FPS, HEIGHT, WIDTH
@@ -58,6 +58,16 @@ img{max-width:100%%}
         self.wfile.write(html.encode())
 
     def _send_mjpeg(self, key: str):
+        # Wait up to 5 seconds for the first frame, so the browser never
+        # receives headers before data is ready.
+        jpeg: Optional[bytes] = None
+        deadline = time.monotonic() + 5.0
+        while not jpeg and time.monotonic() < deadline:
+            with _preview_lock:
+                jpeg = _latest_preview.get(key)
+            if not jpeg:
+                time.sleep(0.1)
+
         self.send_response(200)
         self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
         self.end_headers()

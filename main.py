@@ -30,6 +30,7 @@ import sys
 import time
 from http.server import HTTPServer
 from socket import SOL_SOCKET, SO_REUSEADDR, SO_REUSEPORT
+from socketserver import ThreadingMixIn
 from threading import Event, Thread
 from typing import Dict, List, Optional
 
@@ -56,6 +57,12 @@ from config import (
     WIDTH,
 )
 from preview import _preview_thread, _PreviewHandler
+
+
+class _ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    """HTTPServer that handles each request in its own thread."""
+    allow_reuse_address = True
+    daemon_threads = True
 from recorder import EventRecorder
 
 
@@ -158,7 +165,7 @@ def main():
     preview_server: Optional[HTTPServer] = None
     if PREVIEW_PORT > 0:
         Thread(target=_preview_thread, args=(cameras, _stop), daemon=True).start()
-        preview_server = HTTPServer(("0.0.0.0", PREVIEW_PORT), _PreviewHandler)
+        preview_server = _ThreadingHTTPServer(("0.0.0.0", PREVIEW_PORT), _PreviewHandler)
         # Allow immediate rebind on macOS after a crash
         preview_server.socket.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
         preview_server.socket.setsockopt(SOL_SOCKET, SO_REUSEPORT, 1)
