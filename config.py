@@ -20,11 +20,12 @@ COOLDOWN_SEC = float(os.environ.get("COOLDOWN_SEC", 10))
 # A static light that turns on will stop triggering after this duration.
 BASELINE_LEAK_SEC = float(os.environ.get("BASELINE_LEAK_SEC", 30))
 PREVIEW_PORT = int(os.environ.get("PREVIEW_PORT", 8080))
+CAMERA_INTERFACE = os.environ.get("CAMERA_INTERFACE", "usb")  # "usb" | "mipi"
 DETECT_ENABLED = os.environ.get("DETECT_ENABLED", "1") != "0"
 # "baseline" = running-minimum baseline (filters static light)
 # "absdiff"  = frame-to-frame absolute difference (original)
 DETECT_MODE = os.environ.get("DETECT_MODE", "baseline")
-RECORD_CODEC = os.environ.get("RECORD_CODEC", "libx264")  # ffv1 | libx264 | copy
+RECORD_CODEC = os.environ.get("RECORD_CODEC", "libx264")  # libx264 | ffv1 | h264_v4l2m2m | copy
 
 # ── Camera V4L2 controls (applied before FFmpeg starts) ───────────────────────
 CAM_AUTO_EXPOSURE = int(os.environ.get("CAM_AUTO_EXPOSURE", 0))

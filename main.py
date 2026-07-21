@@ -40,6 +40,7 @@ from config import (
     CAM_BRIGHTNESS,
     CAM_EXPOSURE_ABSOLUTE,
     CAM_GAIN,
+    CAMERA_INTERFACE,
     CAM_SATURATION,
     CAM_WHITE_BALANCE_AUTOMATIC,
     COOLDOWN_SEC,
@@ -48,22 +49,18 @@ from config import (
     DETECT_ENABLED,
     FPS,
     HEIGHT,
-    POST_FRAMES,
-    POST_SEC,
-    PRE_FRAMES,
-    PRE_SEC,
     PREVIEW_PORT,
     REC_DIR,
     WIDTH,
 )
 from preview import _preview_thread, _PreviewHandler
+from recorder import ContinuousRecorder
 
 
 class _ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     """HTTPServer that handles each request in its own thread."""
     allow_reuse_address = True
     daemon_threads = True
-from recorder import EventRecorder
 
 
 # ── FPS status thread ──────────────────────────────────────────────────────
@@ -123,19 +120,18 @@ def _stop_cameras(cameras: Dict[int, Camera]):
 def main():
     print("=== Seafire Stereo Event Recorder ===")
     print(f"Resolution: {WIDTH}x{HEIGHT} @ {FPS} fps  (gray8, raw)")
-    print(f"Ring buffer: {PRE_SEC}s ({PRE_FRAMES} frames)")
-    print(f"Post-event:  {POST_SEC}s ({POST_FRAMES} frames)")
     print(
         f"Detection:   delta_threshold={DELTA_THRESHOLD}, "
         f"delta_pixels={DELTA_PIXELS}, cooldown={COOLDOWN_SEC}s "
         f"({'ON' if DETECT_ENABLED else 'OFF (pipeline test mode)'})"
     )
-    print(f"Output:      {REC_DIR}/")
+    print(f"Recording:   Continuous 15-min segments -> {REC_DIR}/")
     print(
         f"Camera ctl:  auto_exp={CAM_AUTO_EXPOSURE}, gain={CAM_GAIN}, "
         f"exp={CAM_EXPOSURE_ABSOLUTE}, bright={CAM_BRIGHTNESS}, "
         f"sat={CAM_SATURATION}, wb_auto={CAM_WHITE_BALANCE_AUTOMATIC}"
     )
+    print(f"Interface:   {CAMERA_INTERFACE}")
 
     # Find cameras
     devs: List[str] = []
@@ -152,13 +148,12 @@ def main():
 
     # Start cameras
     cameras: Dict[int, Camera] = {}
-    recorder = EventRecorder(cameras)
+    recorder = ContinuousRecorder()
     for i, cam_dev in enumerate(devs):
-        cam = Camera(cam_dev, i, on_event=recorder.trigger)
+        cam = Camera(cam_dev, i, recorder=recorder)
         cameras[i] = cam
         cam.start()
         time.sleep(0.5)
-    recorder._cameras = cameras
 
     # Preview server
     _stop = Event()
@@ -213,6 +208,7 @@ def main():
     finally:
         _kill_ffmpeg(cameras)
         _stop_cameras(cameras)
+        recorder.stop()
         if preview_server:
             preview_server.shutdown()
         print("Exit")

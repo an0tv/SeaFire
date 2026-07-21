@@ -219,29 +219,27 @@ def _absdiff_delta(
 class Camera:
     """One FFmpeg process per camera. Outputs full-res gray8 rawvideo to pipe.
 
-    Maintains a ring buffer of the last PRE_FRAMES frames for pre-event
-    recording, and a post-event buffer that fills after a trigger.
+    Frames are fed to a ContinuousRecorder for disk archiving and kept in a
+    ring buffer for live preview.  Detection events write JSON markers via
+    the recorder.
     """
 
     def __init__(
         self,
         device: str,
         cam_id: int,
-        on_event: Callable[[int, int], None],
+        recorder: "ContinuousRecorder",  # noqa: F821
     ):
         self.device = device
         self.cam_id = cam_id
-        self.on_event = on_event
+        self._recorder = recorder
         self._proc: Optional[subprocess.Popen] = None  # type: ignore[type-arg]
         self._stop = Event()
         self._thread: Optional[Thread] = None
         self.frame_count = 0
         self.last_fps = 0.0
-        # Ring buffer for pre-event lookback
+        # Ring buffer for preview
         self._ring: deque = deque(maxlen=PRE_FRAMES)
-        # Post-event buffer — populated only while _recording flag is set
-        self._post_buffer: List[Tuple[int, bytes]] = []
-        self._recording = Event()
         # Running-minimum baseline for spike detection.
         # Initialized from the first frame; updated every frame with
         # per-pixel minimum; slowly leaked upward to forget old dark values.
@@ -266,18 +264,8 @@ class Camera:
         self._thread = Thread(target=self._run, daemon=True)
         self._thread.start()
 
-    def start_post_buffer(self):
-        """Begin collecting frames into the post-event buffer."""
-        self._post_buffer.clear()
-        self._recording.set()
-
-    def stop_post_buffer(self) -> List[Tuple[int, bytes]]:
-        """Stop collecting and return captured post-event frames."""
-        self._recording.clear()
-        return self._post_buffer.copy()
-
     def snapshot_ring(self) -> List[Tuple[int, bytes]]:
-        """Return a copy of the ring buffer (pre-event frames)."""
+        """Return a copy of the ring buffer (latest frames)."""
         return list(self._ring)
 
     def _run(self):
@@ -373,12 +361,13 @@ class Camera:
                     raw = bytes(buf[:FRAME_BYTES])
                     del buf[:FRAME_BYTES]
                     ts_ns = time.clock_gettime_ns(time.CLOCK_MONOTONIC_RAW)
+
+                    # Always feed to continuous recording
+                    self._recorder.feed(self.cam_id, raw)
+
+                    # Preview ring buffer
                     self._ring.append((ts_ns, raw))
                     self.frame_count += 1
-
-                    # Post-event collection
-                    if self._recording.is_set():
-                        self._post_buffer.append((ts_ns, raw))
 
                     # Delta-based spike detection.
                     # Mode is selected via DETECT_MODE env var:
@@ -440,7 +429,7 @@ class Camera:
                                     f"[cam{self.cam_id}] \N{FIRE} EVENT  "
                                     f"delta_px={changed}  ts={now_ns / 1e9:.3f}s"
                                 )
-                                self.on_event(self.cam_id, ts_ns)
+                                self._recorder.mark_detection(self.cam_id, ts_ns)
         finally:
             # Kill process group (select loop already exited cleanly)
             if self._proc and self._proc.poll() is None:
