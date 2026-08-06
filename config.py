@@ -7,7 +7,7 @@ import os
 # ── Core capture settings ─────────────────────────────────────────────────────
 WIDTH = int(os.environ.get("CAPTURE_WIDTH", 1920))
 HEIGHT = int(os.environ.get("CAPTURE_HEIGHT", 1080))
-FPS = int(os.environ.get("CAPTURE_FPS", 30))
+FPS = int(os.environ.get("CAPTURE_FPS", 15))
 REC_DIR = os.environ.get(
     "RECORDINGS_DIR", os.path.join(os.path.dirname(__file__), "..", "recordings")
 )
@@ -28,15 +28,15 @@ DETECT_MODE = os.environ.get("DETECT_MODE", "baseline")
 RECORD_CODEC = os.environ.get("RECORD_CODEC", "libx264")  # libx264 | ffv1 | h264_v4l2m2m | copy
 
 # ── Camera V4L2 controls (applied before FFmpeg starts) ───────────────────────
-CAM_AUTO_EXPOSURE = int(os.environ.get("CAM_AUTO_EXPOSURE", 0))
-# Exposure in 100µs units.  300 = 30ms ~ fits 30 fps.
-# Raise for sensitivity (slower fps), lower for less motion blur.
-CAM_EXPOSURE_ABSOLUTE = int(os.environ.get("CAM_EXPOSURE_ABSOLUTE", 3000))
-CAM_GAIN = int(os.environ.get("CAM_GAIN", 3000))
-CAM_BRIGHTNESS = int(os.environ.get("CAM_BRIGHTNESS", -50))
-CAM_CONTRAST = int(os.environ.get("CAM_CONTRAST", 50))
-CAM_SATURATION = int(os.environ.get("CAM_SATURATION", 0))
+CAM_AUTO_EXPOSURE = int(os.environ.get("CAM_AUTO_EXPOSURE", 1))   # 0=Auto, 1=Manual
+# Exposure in 100µs units.  5000 = 0.5s.  Only active when auto_exposure=1.
+CAM_EXPOSURE_ABSOLUTE = int(os.environ.get("CAM_EXPOSURE_ABSOLUTE", 5000))
+CAM_GAIN = int(os.environ.get("CAM_GAIN", 100))               # 100-3000
+CAM_BRIGHTNESS = int(os.environ.get("CAM_BRIGHTNESS", 64))    # -64 to 64
+CAM_CONTRAST = int(os.environ.get("CAM_CONTRAST", 20))        # 0-20
+CAM_SATURATION = int(os.environ.get("CAM_SATURATION", 0))     # 0-15
 CAM_WHITE_BALANCE_AUTOMATIC = int(os.environ.get("CAM_WHITE_BALANCE_AUTOMATIC", 0))
+CAM_BACKLIGHT_COMPENSATION = int(os.environ.get("CAM_BACKLIGHT_COMPENSATION", 1))  # 0 or 1
 
 FRAME_BYTES = WIDTH * HEIGHT  # single-channel (gray8) rawvideo
 PRE_FRAMES = int(PRE_SEC * FPS)

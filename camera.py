@@ -27,6 +27,7 @@ import numpy as np
 from config import (
     BASELINE_LEAK_SEC,
     CAM_AUTO_EXPOSURE,
+    CAM_BACKLIGHT_COMPENSATION,
     CAM_BRIGHTNESS,
     CAM_CONTRAST,
     CAM_EXPOSURE_ABSOLUTE,
@@ -135,18 +136,23 @@ def apply_camera_settings(device: str):
         ("contrast", CAM_CONTRAST),
         ("saturation", CAM_SATURATION),
         ("white_balance_automatic", CAM_WHITE_BALANCE_AUTOMATIC),
+        ("backlight_compensation", CAM_BACKLIGHT_COMPENSATION),
     ]
-    args = ["v4l2-ctl", "--device", device]
+    applied = []
+    failed = []
     for name, val in ctrls:
-        args += ["-c", f"{name}={val}"]
-    try:
-        subprocess.run(args, capture_output=True, timeout=5, check=True)
-        print(f"[ctl] {device}: controls applied")
-    except subprocess.CalledProcessError as e:
-        stderr = e.stderr.decode(errors="replace").strip() if e.stderr else ""
-        print(f"[ctl] {device}: some controls failed — {stderr}")
-    except Exception as e:
-        print(f"[ctl] {device}: v4l2-ctl error — {e}")
+        try:
+            subprocess.run(
+                ["v4l2-ctl", "--device", device, "-c", f"{name}={val}"],
+                capture_output=True, timeout=3, check=True,
+            )
+            applied.append(name)
+        except subprocess.CalledProcessError:
+            failed.append(name)
+    if applied:
+        print(f"[ctl] {device}: applied {applied}")
+    if failed:
+        print(f"[ctl] {device}: skipped unsupported {failed}")
 
 
 # ── Delta spike detector ────────────────────────────────────────────────────

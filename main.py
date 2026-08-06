@@ -43,6 +43,8 @@ from config import (
     CAMERA_INTERFACE,
     CAM_SATURATION,
     CAM_WHITE_BALANCE_AUTOMATIC,
+    CAM_CONTRAST,
+    CAM_BACKLIGHT_COMPENSATION,
     COOLDOWN_SEC,
     DELTA_PIXELS,
     DELTA_THRESHOLD,
@@ -114,6 +116,31 @@ def _stop_cameras(cameras: Dict[int, Camera]):
         t.join(timeout=3)
 
 
+def _rescan_cameras(cameras: Dict[int, Camera], recorder):
+    """Re-run find_cameras() and add devices that aren't already running.
+
+    Recovers from USB bus resets / device re-enumeration, where cameras may
+    come back on different /dev/video* nodes than they started on.
+    """
+    try:
+        devs = find_cameras()
+    except Exception:
+        return
+    if not devs:
+        return
+    used = {c.device for c in cameras.values()}
+    new_devs = [d for d in devs if d not in used]
+    if not new_devs:
+        return
+    next_id = max(cameras.keys(), default=-1) + 1
+    for dev in new_devs:
+        cam = Camera(dev, next_id, recorder=recorder)
+        cameras[next_id] = cam
+        cam.start()
+        print(f"[cam] re-discovered {dev} as cam{next_id}")
+        next_id += 1
+
+
 # ── Main ────────────────────────────────────────────────────────────────────
 
 
@@ -182,6 +209,8 @@ def main():
     try:
         fail_count: Dict[int, int] = {}
         next_restart: Dict[int, float] = {}
+        last_rescan = 0.0
+        RESCAN_INTERVAL = 15.0  # seconds between camera re-discovery
         while not _stop.is_set():
             _stop.wait(1.0)
             now = time.monotonic()
@@ -201,6 +230,12 @@ def main():
                     time.sleep(0.5)
                     if not _stop.is_set():
                         c.start()
+
+            # Re-discover cameras that reappeared after a USB reset / re-enum.
+            # If devices came back on new /dev/video* nodes, add them.
+            if now - last_rescan >= RESCAN_INTERVAL:
+                last_rescan = now
+                _rescan_cameras(cameras, recorder)
 
     except KeyboardInterrupt:
         print("\nShutting down...")
