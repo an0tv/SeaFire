@@ -1,27 +1,10 @@
 #!/usr/bin/env python3
 """
+Seafire — Stereo Bioluminescence Event Recorder
 
-Env vars:
-  CAPTURE_WIDTH        Full-res width  (default 1280)
-  CAPTURE_HEIGHT       Full-res height (default 720)
-  CAPTURE_FPS          Capture framerate (default 30)
-  RECORDINGS_DIR       Output directory (default ../recordings)
-  PRE_SEC              Seconds of pre-event buffer (default 10)
-  POST_SEC             Seconds to record post-event (default 30)
-  DELTA_THRESHOLD      Min pixel change 0-255 for a "spike" (default 40)
-  DELTA_PIXELS         Min changed-pixel count to trigger event (default 200)
-  COOLDOWN_SEC         Minimum seconds between consecutive events (default 10)
-  PREVIEW_PORT         HTTP port for MJPEG preview, 0=disabled (default 8080)
-  DETECT_ENABLED       Set to "0" to disable event detection (default "1")
+Usage:  python3 main.py
 
-  Camera V4L2 controls (dark-field defaults):
-  CAM_AUTO_EXPOSURE       0=auto, 1=manual (default 1)
-  CAM_EXPOSURE_ABSOLUTE   Exposure in 100us units, 5-233016 (default 5000)
-  CAM_GAIN                Analog gain 100-3000 (default 3000)
-  CAM_BRIGHTNESS          -64..64 (default -10)
-  CAM_CONTRAST            0..100 (default 50)
-  CAM_SATURATION          0..100 (default 0)
-  CAM_WHITE_BALANCE_AUTOMATIC  0=off, 1=on (default 0)
+Env vars: see config.py for full list.
 """
 
 import os
@@ -37,18 +20,13 @@ from typing import Dict, List, Optional
 from camera import Camera, find_cameras
 from config import (
     CAM_AUTO_EXPOSURE,
+    CAM_BACKLIGHT_COMPENSATION,
     CAM_BRIGHTNESS,
+    CAM_CONTRAST,
     CAM_EXPOSURE_ABSOLUTE,
     CAM_GAIN,
-    CAMERA_INTERFACE,
     CAM_SATURATION,
     CAM_WHITE_BALANCE_AUTOMATIC,
-    CAM_CONTRAST,
-    CAM_BACKLIGHT_COMPENSATION,
-    COOLDOWN_SEC,
-    DELTA_PIXELS,
-    DELTA_THRESHOLD,
-    DETECT_ENABLED,
     FPS,
     HEIGHT,
     PREVIEW_PORT,
@@ -56,20 +34,17 @@ from config import (
     WIDTH,
 )
 from preview import _preview_thread, _PreviewHandler
-from recorder import ContinuousRecorder
+from stereo_recorder import stereo_muxer_thread
 
 
 class _ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
-    """HTTPServer that handles each request in its own thread."""
     allow_reuse_address = True
     daemon_threads = True
 
 
-# ── FPS status thread ──────────────────────────────────────────────────────
-
+# ── FPS status ──────────────────────────────────────────────────────────────
 
 def _fps_status(cameras: Dict[int, Camera], stop: Event):
-    """Print periodic FPS for each running camera."""
     prev: Dict[int, int] = {}
     prev_time = time.monotonic()
     while not stop.is_set():
@@ -78,50 +53,47 @@ def _fps_status(cameras: Dict[int, Camera], stop: Event):
         now = time.monotonic()
         elapsed = now - prev_time
         parts = []
-        for cam_id, c in list(cameras.items()):
+        for cam_id, c in sorted(cameras.items()):
             if cam_id not in prev:
                 prev[cam_id] = 0
             if c.alive:
                 delta = c.frame_count - prev[cam_id]
                 fps_val = delta / elapsed if elapsed > 0 else 0
                 c.last_fps = fps_val
-                parts.append(f"{delta}f/{fps_val:.1f} fps")
+                parts.append(f"cam{cam_id}:{fps_val:.1f}")
             else:
-                parts.append("DEAD")
+                parts.append(f"cam{cam_id}:DEAD")
             prev[cam_id] = c.frame_count
         prev_time = now
-        print(f"[FPS] {'  |  '.join(parts)}")
+        print(f"[FPS] {'  '.join(parts)}")
 
 
-# ── Shutdown helpers ───────────────────────────────────────────────────────
+# ── Shutdown ────────────────────────────────────────────────────────────────
 
-
-def _kill_ffmpeg(cameras: Dict[int, Camera]):
+def _kill_camera_procs(cameras: Dict[int, Camera]):
+    """Send SIGINT to camera ffmpeg processes for clean exit."""
     for c in cameras.values():
         proc = getattr(c, "_proc", None)
         if proc and proc.poll() is None:
             try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                os.killpg(os.getpgid(proc.pid), signal.SIGINT)
             except (ProcessLookupError, OSError):
                 pass
 
 
-def _stop_cameras(cameras: Dict[int, Camera]):
+def _stop_cameras(cameras: Dict[int, Camera], timeout: float = 5):
     threads = []
     for c in list(cameras.values()):
         t = Thread(target=c.stop, daemon=True)
         t.start()
         threads.append(t)
+    deadline = time.monotonic() + timeout
     for t in threads:
-        t.join(timeout=3)
+        remaining = max(0.1, deadline - time.monotonic())
+        t.join(timeout=remaining)
 
 
-def _rescan_cameras(cameras: Dict[int, Camera], recorder):
-    """Re-run find_cameras() and add devices that aren't already running.
-
-    Recovers from USB bus resets / device re-enumeration, where cameras may
-    come back on different /dev/video* nodes than they started on.
-    """
+def _rescan_cameras(cameras: Dict[int, Camera]):
     try:
         devs = find_cameras()
     except Exception:
@@ -134,7 +106,7 @@ def _rescan_cameras(cameras: Dict[int, Camera], recorder):
         return
     next_id = max(cameras.keys(), default=-1) + 1
     for dev in new_devs:
-        cam = Camera(dev, next_id, recorder=recorder)
+        cam = Camera(dev, next_id)
         cameras[next_id] = cam
         cam.start()
         print(f"[cam] re-discovered {dev} as cam{next_id}")
@@ -143,77 +115,76 @@ def _rescan_cameras(cameras: Dict[int, Camera], recorder):
 
 # ── Main ────────────────────────────────────────────────────────────────────
 
-
 def main():
-    print("=== Seafire Stereo Event Recorder ===")
-    print(f"Resolution: {WIDTH}x{HEIGHT} @ {FPS} fps  (gray8, raw)")
-    print(
-        f"Detection:   delta_threshold={DELTA_THRESHOLD}, "
-        f"delta_pixels={DELTA_PIXELS}, cooldown={COOLDOWN_SEC}s "
-        f"({'ON' if DETECT_ENABLED else 'OFF (pipeline test mode)'})"
-    )
-    print(f"Recording:   Continuous 15-min segments -> {REC_DIR}/")
-    print(
-        f"Camera ctl:  auto_exp={CAM_AUTO_EXPOSURE}, gain={CAM_GAIN}, "
-        f"exp={CAM_EXPOSURE_ABSOLUTE}, bright={CAM_BRIGHTNESS}, "
-        f"sat={CAM_SATURATION}, wb_auto={CAM_WHITE_BALANCE_AUTOMATIC}"
-    )
-    print(f"Interface:   {CAMERA_INTERFACE}")
+    print("═══ Seafire ═══")
+    print(f"  Resolution:   {WIDTH}x{HEIGHT} @ {FPS} fps "
+          f"(side-by-side: {WIDTH * 2}x{HEIGHT})")
+    print(f"  Recording:    {REC_DIR}/  (→ SSD on rotation)")
+    print(f"  Cam ctl:      auto_exp={CAM_AUTO_EXPOSURE}, gain={CAM_GAIN}, "
+          f"exp={CAM_EXPOSURE_ABSOLUTE}, bright={CAM_BRIGHTNESS}")
+    print(f"  Preview:      http://0.0.0.0:{PREVIEW_PORT}" if PREVIEW_PORT
+          else "  Preview:      disabled")
 
-    # Find cameras
+    # ── Find cameras ────────────────────────────────────────────────────────
     devs: List[str] = []
     for attempt in range(10):
         devs = find_cameras()
         if len(devs) >= 1:
             break
-        print(f"Waiting for cameras... (attempt {attempt + 1}/10)")
+        print(f"  Waiting for cameras... ({attempt + 1}/10)")
         time.sleep(2)
     if not devs:
-        print("No cameras found, exiting")
+        print("  No cameras found, exiting")
         sys.exit(1)
-    print(f"Found {len(devs)} camera(s): {devs}")
+    print(f"  Cameras:      {devs}")
 
-    # Start cameras
+    # ── Start cameras ───────────────────────────────────────────────────────
     cameras: Dict[int, Camera] = {}
-    recorder = ContinuousRecorder()
     for i, cam_dev in enumerate(devs):
-        cam = Camera(cam_dev, i, recorder=recorder)
+        cam = Camera(cam_dev, i)
         cameras[i] = cam
         cam.start()
         time.sleep(0.5)
 
-    # Preview server
     _stop = Event()
+
+    # Stereo muxer — records side-by-side directly to MKV, no merge needed
+    Thread(target=stereo_muxer_thread, args=(cameras, _stop), daemon=True).start()
+
+    # Preview server
     preview_server: Optional[HTTPServer] = None
     if PREVIEW_PORT > 0:
         Thread(target=_preview_thread, args=(cameras, _stop), daemon=True).start()
-        preview_server = _ThreadingHTTPServer(("0.0.0.0", PREVIEW_PORT), _PreviewHandler)
-        # Allow immediate rebind on macOS after a crash
+        preview_server = _ThreadingHTTPServer(
+            ("0.0.0.0", PREVIEW_PORT), _PreviewHandler
+        )
         preview_server.socket.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
         preview_server.socket.setsockopt(SOL_SOCKET, SO_REUSEPORT, 1)
         Thread(target=preview_server.serve_forever, daemon=True).start()
-        print(f"[preview] HTTP MJPEG at http://0.0.0.0:{PREVIEW_PORT}")
 
     print(f"{len(cameras)} camera(s) running. Ctrl+C to stop.")
+    print("─" * 50)
 
-    # FPS status
+    # FPS monitor
     Thread(target=_fps_status, args=(cameras, _stop), daemon=True).start()
 
-    # Handle SIGTERM (used by systemd / docker)
-    def _sigterm(sig, frame):
+    # Handlers
+    def _handle_term(sig, frame):
         _stop.set()
-
-    signal.signal(signal.SIGTERM, _sigterm)
+    signal.signal(signal.SIGTERM, _handle_term)
 
     # ── Main loop ──────────────────────────────────────────────────────────
+    fail_count: Dict[int, int] = {}
+    next_restart: Dict[int, float] = {}
+    last_rescan = 0.0
+    RESCAN_INTERVAL = 15.0
+
     try:
-        fail_count: Dict[int, int] = {}
-        next_restart: Dict[int, float] = {}
-        last_rescan = 0.0
-        RESCAN_INTERVAL = 15.0  # seconds between camera re-discovery
         while not _stop.is_set():
             _stop.wait(1.0)
             now = time.monotonic()
+
+            # Dead camera restart
             for cam_id, c in list(cameras.items()):
                 if c.alive or _stop.is_set():
                     continue
@@ -221,32 +192,33 @@ def main():
                     continue
                 fail_count[cam_id] = fail_count.get(cam_id, 0) + 1
                 if fail_count[cam_id] > 5:
-                    print(f"[cam{cam_id}] failed too many times, giving up")
+                    print(f"[cam{cam_id}] failed 5×, giving up")
                     del cameras[cam_id]
                 else:
                     delay = min(2 ** fail_count[cam_id], 30)
-                    print(f"[cam{cam_id}] restarting in {delay}s...")
+                    print(f"[cam{cam_id}] dead — restart in {delay}s")
                     next_restart[cam_id] = now + delay
                     time.sleep(0.5)
                     if not _stop.is_set():
                         c.start()
 
-            # Re-discover cameras that reappeared after a USB reset / re-enum.
-            # If devices came back on new /dev/video* nodes, add them.
+            # Rediscover cameras after USB reset
             if now - last_rescan >= RESCAN_INTERVAL:
                 last_rescan = now
-                _rescan_cameras(cameras, recorder)
+                _rescan_cameras(cameras)
 
     except KeyboardInterrupt:
         print("\nShutting down...")
         _stop.set()
     finally:
-        _kill_ffmpeg(cameras)
-        _stop_cameras(cameras)
-        recorder.stop()
+        print("  Stopping cameras...")
+        _kill_camera_procs(cameras)
+        _stop_cameras(cameras, timeout=10)
+
         if preview_server:
             preview_server.shutdown()
-        print("Exit")
+
+        print("  Done.")
 
 
 if __name__ == "__main__":

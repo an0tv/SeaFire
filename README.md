@@ -1,83 +1,77 @@
-# SeaFire — Stereo Bioluminescence Event Recorder
+# SeaFire — Underwater Stereo Camera Recorder
 
-Low-light stereo camera system for detecting and recording bioluminescent
-emissions in the field. Runs on Raspberry Pi 5 with two USB UVC cameras.
+Stereo video recording for prolonged underwater deployments. Two cameras are
+stitched side-by-side in real time and saved directly to segmented MKV files —
+no post-processing, no sync steps, no merge tools. Output is ready to watch the
+moment you pull the SSD.
+
+Runs on Raspberry Pi 5 with two USB UVC cameras.
 
 ## Hardware
 
-- Raspberry Pi 5
-- 2× Arducam B0496 (USB3 2MP) — one per **separate** USB controller
-- Storage: external SSD recommended (`/media/rpi/SSD`)
+- **Raspberry Pi 5**
+- **2× Arducam B0496** (USB3 2MP) — one per **separate** USB controller
+- **Storage:** external SSD (`/media/rpi/SSD`) — optional; recordings stay local if
+  unmounted
+- **Power:** 5V/5A USB-PD supply (official Pi 5 PSU or 25W+ charger)
 
 ## Quick Start
 
 ```bash
 cd ~/Documents/SeaFire
 pip install -r requirements.txt
-
-# Default settings (1080p, 15fps, baseline detection, H.264 hardware encoding)
-python3 main.py
-
-# Low-light / dark-field setup:
-CAM_AUTO_EXPOSURE=1 CAM_EXPOSURE_ABSOLUTE=5000 CAM_GAIN=100 \
-  CAM_BRIGHTNESS=64 CAM_CONTRAST=20 CAM_BACKLIGHT_COMPENSATION=1 \
-  python3 main.py
+sudo python3 main.py
 ```
 
-## Pi 5 USB Power Fix
+Output lands in `recordings_local/` as `sbs_YYYYMMDD_HHMMSS.mkv` (3840×1080,
+cam0 left, cam1 right). Completed segments auto-transfer to SSD if mounted.
 
-The Pi 5 PMIC limits USB current to ~768mA unless it detects a 5A-capable PSU via USB-PD. If cameras drop out under load, add to `/boot/firmware/config.txt`:
+## How It Works
 
 ```
-# /boot/firmware/config.txt
-[all]
-usb_max_current_enable=1
+cam0 ──→ ring buffer ──┐
+                        ├─→ stitch ──→ encode ──→ sbs_*.mkv ──→ SSD
+cam1 ──→ ring buffer ──┘
 ```
 
-Then **reboot**:
+Both cameras feed raw frames into ring buffers. A stereo muxer thread grabs the
+latest frame from each, stitches them side-by-side, and pipes the result to a
+single FFmpeg encoder. Because both frames are pulled at the same clock tick,
+they're inherently synced — the same logic the live preview uses, just at full
+resolution and saved to disk.
 
-```bash
-sudo reboot
-```
+Segments rotate every hour (configurable). A live 640×360 MJPEG preview is
+served at `http://<pi-ip>:8080`.
 
-If the Pi still reports undervoltage (`vcgencmd get_throttled` shows `0x50000`),
-you need a **5V/5A USB-PD power supply** (official Pi 5 PSU or equivalent 25W+ charger).
-Without it, `usb_max_current_enable` is silently ignored.
+## Deployment Workflow
 
-For battery-powered field deployments with an IP2369 PMIC, **power the Pi via
-GPIO pins 2/4 (+5V) and 6/9 (GND)** to bypass USB-PD negotiation entirely.
-Route camera VBUS directly from the 5V rail — not through the Pi's USB ports —
-so the PMIC never sees current draw on the USB bus.
+1. **Pre-deployment** — set exposure/gain via env vars, verify cameras + storage
+2. **Underwater** — `sudo python3 main.py`, runs unattended
+3. **On land** — copy `sbs_*.mkv` off the SSD. Done.
 
-## Environment Variables
+## Configuration
+
+All settings via environment variables.
 
 ### Capture
 
 | Variable | Default | Description |
 |---|---|---|
-| `CAPTURE_WIDTH` | 1920 | Full-res width |
-| `CAPTURE_HEIGHT` | 1080 | Full-res height |
-| `CAPTURE_FPS` | 15 | Capture framerate (15 for dual-camera, 30 for single) |
-| `RECORDINGS_DIR` | `../recordings` | Output directory |
-| `RECORD_CODEC` | `libx264` | Encoder: `h264_v4l2m2m` (HW), `ffv1` (lossless), `libx264` |
-
-### Detection
-
-| Variable | Default | Description |
-|---|---|---|
-| `DETECT_ENABLED` | `1` | Set to `0` for pipeline test mode (no detection) |
-| `DETECT_MODE` | `baseline` | `baseline` (filters static light) or `absdiff` (frame-to-frame) |
-| `DELTA_THRESHOLD` | 40 | Min pixel intensity change (0–255) to count as a "spike" |
-| `DELTA_PIXELS` | 200 | Min changed-pixel count to trigger an event |
-| `COOLDOWN_SEC` | 10 | Minimum seconds between consecutive events |
-| `BASELINE_LEAK_SEC` | 30 | How fast the baseline forgets a static light |
+| `CAPTURE_WIDTH` | 1920 | Per-camera frame width |
+| `CAPTURE_HEIGHT` | 1080 | Per-camera frame height |
+| `CAPTURE_FPS` | 15 | 15 for dual-camera, 30 for single |
+| `RECORDINGS_DIR` | `./recordings_local` | Local staging directory |
+| `SSD_RECORDINGS_DIR` | `/media/rpi/SSD/seafire_recordings` | SSD destination |
+| `SEGMENT_DURATION_SEC` | 3600 | Segment length (1 hour) |
+| `RECORD_CODEC` | `libx264` | `h264_v4l2m2m` (HW), `ffv1` (lossless), `libx264` |
+| `RECORD_CRF` | 30 | libx264 quality (0=lossless, 51=worst) |
 
 ### Camera V4L2 Controls
 
 | Variable | Default | Range | Description |
 |---|---|---|---|
-| `CAM_AUTO_EXPOSURE` | 1 | 0–3 | 0=Auto, 1=Manual |
-| `CAM_EXPOSURE_ABSOLUTE` | 5000 | 5–233016 | Exposure in 100µs units (0.5s default) |
+| `CAM_AUTO_EXPOSURE` | 1 | 0–1 | 0=Auto, 1=Manual |
+| `CAM_EXPOSURE_ABSOLUTE` | 5000 | 5–233016 | Exposure in 100µs units |
 | `CAM_GAIN` | 100 | 100–3000 | Analog gain |
 | `CAM_BRIGHTNESS` | 64 | -64–64 | |
 | `CAM_CONTRAST` | 20 | 0–20 | |
@@ -89,68 +83,57 @@ so the PMIC never sees current draw on the USB bus.
 
 | Variable | Default | Description |
 |---|---|---|
-| `PREVIEW_PORT` | 8080 | HTTP MJPEG preview port, 0 to disable |
+| `PREVIEW_PORT` | 8080 | MJPEG preview port; `0` to disable |
 
-## Live Preview
+## Pi 5 USB Power
 
-Open `http://<pi-ip>:8080` — shows side-by-side stereo view with MJPEG stream.
-
-## Monitoring
-
-The capture service prints FPS every 2 seconds:
+The Pi 5 PMIC limits USB current to ~768mA unless it detects a 5A PSU. Add to
+`/boot/firmware/config.txt`:
 
 ```
-[FPS] 149f/14.9 fps  |  151f/15.1 fps
+[all]
+usb_max_current_enable=1
 ```
 
-Detection events are logged to `recordings/detections/` as JSON files:
+Then `sudo reboot`. Without a 5A PSU this setting is ignored.
 
-```json
-{
-  "type": "detection",
-  "camera_id": 0,
-  "timestamp_utc": "2026-08-06T21:48:52.123Z",
-  "segment_file": "cam0_20260806_214852.mkv",
-  "segment_offset_sec": 42.5
-}
-```
+For battery deployments (IP2369 BMS): power via GPIO pins 2/4 (+5V) and 6/9
+(GND) to bypass USB-PD negotiation. Route camera VBUS directly from the 5V rail.
 
 ## Power Monitoring
 
 ```bash
-python3 power.py   # shows per-rail power draw on Pi 5 PMIC
+python3 power.py   # Pi 5 PMIC per-rail power draw
 ```
 
-## Camera Setup
+## Project Structure
 
-Lock camera settings before deployment:
-
-```bash
-# Verify cameras on separate USB buses
-v4l2-ctl --list-devices | grep -B1 -A2 Arducam
-
-# Apply locked settings
-v4l2-ctl --device=/dev/video0 -c auto_exposure=1 -c exposure_time_absolute=5000 \
-         -c gain=100 -c brightness=64 -c contrast=20 -c backlight_compensation=1
-v4l2-ctl --device=/dev/video2 -c auto_exposure=1 -c exposure_time_absolute=5000 \
-         -c gain=100 -c brightness=64 -c contrast=20 -c backlight_compensation=1
+```
+SeaFire/
+├── main.py              # Entry point — discovery, orchestration, preview
+├── camera.py            # FFmpeg capture, V4L2 controls, ring buffer
+├── stereo_recorder.py   # Side-by-side stitch + encode to MKV
+├── config.py            # Environment variable configuration
+├── preview.py           # Low-res MJPEG HTTP preview server
+├── power.py             # Pi 5 PMIC power readout
+├── requirements.txt     # Pillow
+└── recordings_local/    # Default output directory
 ```
 
 ## Troubleshooting
 
-**"Device or resource busy"** — Stale kernel handle after crash:
+**"Device or resource busy"** — stale kernel handle:
+
 ```bash
-# Find and reset the stuck USB bus
 echo "2-1" | sudo tee /sys/bus/usb/drivers/usb/unbind
 sleep 1
 echo "2-1" | sudo tee /sys/bus/usb/drivers/usb/bind
 ```
 
-**Cameras show different exposures** — Set `CAM_AUTO_EXPOSURE=1` (Manual). In Auto
-mode each camera meters independently and will diverge.
+**One camera at 0 FPS** — swap USB ports to isolate camera vs. port.
 
-**USB drops under load** — See Pi 5 USB Power Fix above. If the issue persists,
-use a powered USB 3.0 hub or route camera power from an external 5V rail.
+**SSD not detected** — `lsblk`, check `/media/rpi/SSD`. Files stay local if
+unmounted.
 
-**One camera refuses to stream** — Try swapping USB ports to isolate whether
-it's a camera, cable, or port issue.
+**Cameras show different exposure** — set `CAM_AUTO_EXPOSURE=1` (Manual) with
+fixed `CAM_EXPOSURE_ABSOLUTE` so both use identical settings.

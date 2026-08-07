@@ -21,11 +21,7 @@ from typing import Callable, List, Optional, Tuple
 
 IS_MACOS = platform.system() == "Darwin"
 
-import cv2
-import numpy as np
-
 from config import (
-    BASELINE_LEAK_SEC,
     CAM_AUTO_EXPOSURE,
     CAM_BACKLIGHT_COMPENSATION,
     CAM_BRIGHTNESS,
@@ -34,11 +30,6 @@ from config import (
     CAM_GAIN,
     CAM_SATURATION,
     CAM_WHITE_BALANCE_AUTOMATIC,
-    COOLDOWN_SEC,
-    DELTA_PIXELS,
-    DELTA_THRESHOLD,
-    DETECT_ENABLED,
-    DETECT_MODE,
     FPS,
     FRAME_BYTES,
     HEIGHT,
@@ -155,109 +146,29 @@ def apply_camera_settings(device: str):
         print(f"[ctl] {device}: skipped unsupported {failed}")
 
 
-# ── Delta spike detector ────────────────────────────────────────────────────
-
-
-def _baseline_delta(
-    current_bytes: bytes,
-    baseline: "np.ndarray",
-    delta: int,
-    width: int,
-    height: int,
-) -> int:
-    """Count pixels where the current frame is brighter than the
-    running-minimum baseline by more than *delta*.
-
-    Only positive-going changes (brightening) are counted — this filters
-    out static light sources and objects occluding light.
-    """
-    cur = np.frombuffer(current_bytes, dtype=np.uint8).reshape((height, width))
-    # int16 so subtraction keeps negative values for cv2.threshold
-    bright = cv2.subtract(cur.astype(np.int16), baseline.astype(np.int16))
-    _, thresh = cv2.threshold(bright, delta, 255, cv2.THRESH_BINARY)
-    return int(cv2.countNonZero(thresh))
-
-
-def _baseline_update(
-    current_bytes: bytes,
-    baseline: "np.ndarray",
-    width: int,
-    height: int,
-) -> None:
-    """Update the running-minimum baseline in-place."""
-    cur = np.frombuffer(current_bytes, dtype=np.uint8).reshape((height, width))
-    cv2.min(cur, baseline, dst=baseline)
-
-
-def _baseline_leak(baseline: "np.ndarray", step: int = 1) -> None:
-    """Slowly raise the baseline so it forgets old dark values.
-
-    cv2.add saturates at 255 for uint8, so no explicit clip needed.
-    """
-    cv2.add(baseline, step, dst=baseline)
-
-
-# ── Original absdiff detector (kept for A/B comparison) ───────────────────
-
-
-def _absdiff_delta(
-    current: bytes,
-    previous: bytes,
-    delta: int,
-    width: int,
-    height: int,
-) -> int:
-    """Original frame-to-frame absolute-difference detector.
-
-    Counts pixels where |current[i] - previous[i]| > delta.
-    Triggers on ANY change — brightening, darkening, static-light flicker.
-    """
-    a = np.frombuffer(current, dtype=np.uint8).reshape((height, width))
-    b = np.frombuffer(previous, dtype=np.uint8).reshape((height, width))
-    diff = cv2.absdiff(a, b)
-    _, thresh = cv2.threshold(diff, delta, 255, cv2.THRESH_BINARY)
-    return int(cv2.countNonZero(thresh))
-
-
 # ── Camera class ────────────────────────────────────────────────────────────
 
 
 class Camera:
     """One FFmpeg process per camera. Outputs full-res gray8 rawvideo to pipe.
 
-    Frames are fed to a ContinuousRecorder for disk archiving and kept in a
-    ring buffer for live preview.  Detection events write JSON markers via
-    the recorder.
+    Frames are kept in a ring buffer for live preview and stereo recording.
+    The stereo muxer thread pulls from this buffer.
     """
 
     def __init__(
         self,
         device: str,
         cam_id: int,
-        recorder: "ContinuousRecorder",  # noqa: F821
     ):
         self.device = device
         self.cam_id = cam_id
-        self._recorder = recorder
         self._proc: Optional[subprocess.Popen] = None  # type: ignore[type-arg]
         self._stop = Event()
         self._thread: Optional[Thread] = None
         self.frame_count = 0
         self.last_fps = 0.0
-        # Ring buffer for preview
         self._ring: deque = deque(maxlen=PRE_FRAMES)
-        # Running-minimum baseline for spike detection.
-        # Initialized from the first frame; updated every frame with
-        # per-pixel minimum; slowly leaked upward to forget old dark values.
-        self._baseline: Optional["np.ndarray"] = None
-        self._frame_index = 0
-        # Leak the baseline by 1 unit every _leak_interval frames.
-        # This causes a full reset from 0→255 in ~BASELINE_LEAK_SEC seconds.
-        self._leak_interval = max(1, int(BASELINE_LEAK_SEC * FPS / 256))
-        # Previous frame for absdiff mode
-        self._prev_frame: Optional[bytes] = None
-        # Detection state
-        self._last_event_ns = 0
 
     @property
     def alive(self) -> bool:
@@ -366,76 +277,11 @@ class Camera:
                 while len(buf) >= FRAME_BYTES:
                     raw = bytes(buf[:FRAME_BYTES])
                     del buf[:FRAME_BYTES]
+
+                    # Feed to ring buffer (stereo muxer pulls from here)
                     ts_ns = time.clock_gettime_ns(time.CLOCK_MONOTONIC_RAW)
-
-                    # Always feed to continuous recording
-                    self._recorder.feed(self.cam_id, raw)
-
-                    # Preview ring buffer
                     self._ring.append((ts_ns, raw))
                     self.frame_count += 1
-
-                    # Delta-based spike detection.
-                    # Mode is selected via DETECT_MODE env var:
-                    #   "baseline" = running-minimum (filters static light)
-                    #   "absdiff"  = frame-to-frame absolute difference
-                    if DETECT_ENABLED:
-                        changed = 0
-
-                        if DETECT_MODE == "absdiff":
-                            # ── Original absdiff path ────────────────────
-                            if self._prev_frame is not None:
-                                changed = _absdiff_delta(
-                                    raw,
-                                    self._prev_frame,
-                                    DELTA_THRESHOLD,
-                                    WIDTH,
-                                    HEIGHT,
-                                )
-                            self._prev_frame = raw
-
-                        elif DETECT_MODE == "baseline":
-                            # ── Running-minimum baseline path ────────────
-                            if self._baseline is None:
-                                self._baseline = (
-                                    np.frombuffer(raw, dtype=np.uint8)
-                                    .reshape((HEIGHT, WIDTH))
-                                    .copy()
-                                )
-                            else:
-                                changed = _baseline_delta(
-                                    raw,
-                                    self._baseline,
-                                    DELTA_THRESHOLD,
-                                    WIDTH,
-                                    HEIGHT,
-                                )
-                                _baseline_update(
-                                    raw,
-                                    self._baseline,
-                                    WIDTH,
-                                    HEIGHT,
-                                )
-                                self._frame_index += 1
-                                if self._frame_index % self._leak_interval == 0:
-                                    _baseline_leak(self._baseline)
-
-                        else:
-                            print(
-                                f"[cam{self.cam_id}] Unknown DETECT_MODE="
-                                f"{DETECT_MODE!r}, detection disabled"
-                            )
-
-                        if changed >= DELTA_PIXELS:
-                            now_ns = time.clock_gettime_ns(time.CLOCK_MONOTONIC_RAW)
-                            cooldown_ns = int(COOLDOWN_SEC * 1e9)
-                            if now_ns - self._last_event_ns >= cooldown_ns:
-                                self._last_event_ns = now_ns
-                                print(
-                                    f"[cam{self.cam_id}] \N{FIRE} EVENT  "
-                                    f"delta_px={changed}  ts={now_ns / 1e9:.3f}s"
-                                )
-                                self._recorder.mark_detection(self.cam_id, ts_ns)
         finally:
             # Kill process group (select loop already exited cleanly)
             if self._proc and self._proc.poll() is None:

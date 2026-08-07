@@ -3,29 +3,56 @@ Seafire configuration — all constants from environment variables.
 """
 
 import os
+import sys
 
 # ── Core capture settings ─────────────────────────────────────────────────────
 WIDTH = int(os.environ.get("CAPTURE_WIDTH", 1920))
 HEIGHT = int(os.environ.get("CAPTURE_HEIGHT", 1080))
 FPS = int(os.environ.get("CAPTURE_FPS", 15))
 REC_DIR = os.environ.get(
-    "RECORDINGS_DIR", os.path.join(os.path.dirname(__file__), "..", "recordings")
+    "RECORDINGS_DIR", os.path.join(os.path.dirname(__file__), "recordings_local")
 )
-PRE_SEC = float(os.environ.get("PRE_SEC", 10))
-POST_SEC = float(os.environ.get("POST_SEC", 10))
-DELTA_THRESHOLD = int(os.environ.get("DELTA_THRESHOLD", 40))
-DELTA_PIXELS = int(os.environ.get("DELTA_PIXELS", 200))
-COOLDOWN_SEC = float(os.environ.get("COOLDOWN_SEC", 10))
-# Seconds for the running-minimum baseline to fully "forget" a dark pixel.
-# A static light that turns on will stop triggering after this duration.
-BASELINE_LEAK_SEC = float(os.environ.get("BASELINE_LEAK_SEC", 30))
+SSD_DIR = os.environ.get("SSD_RECORDINGS_DIR", "/media/rpi/SSD/seafire_recordings")
+
+# ── Startup checks ───────────────────────────────────────────────────────────
+
+def _check_dir(path: str, name: str):
+    try:
+        os.makedirs(path, exist_ok=True)
+        test = os.path.join(path, ".write_test")
+        with open(test, "w") as f:
+            f.write("ok")
+        os.remove(test)
+        print(f"[check] {name}: {path} — OK")
+    except Exception as e:
+        print(f"[check] {name}: {path} — FAILED ({e})")
+        return False
+    return True
+
+
+def _is_mount(path: str) -> bool:
+    """Check if path or its parent is a mount point (i.e. SSD actually plugged in)."""
+    p = os.path.realpath(path)
+    while p != "/":
+        if os.path.ismount(p):
+            return True
+        p = os.path.dirname(p)
+    return False
+
+
+if not _check_dir(REC_DIR, "Local recordings"):
+    print("ERROR: Cannot write to local recording directory.")
+    sys.exit(1)
+
+if not _is_mount(SSD_DIR):
+    print(f"[check] SSD: {SSD_DIR} — NOT MOUNTED (recordings will stay local)")
+elif not _check_dir(SSD_DIR, "SSD transfer"):
+    print("WARNING: SSD directory not writable — recordings will stay local.")
+
 PREVIEW_PORT = int(os.environ.get("PREVIEW_PORT", 8080))
-CAMERA_INTERFACE = os.environ.get("CAMERA_INTERFACE", "usb")  # "usb" | "mipi"
-DETECT_ENABLED = os.environ.get("DETECT_ENABLED", "1") != "0"
-# "baseline" = running-minimum baseline (filters static light)
-# "absdiff"  = frame-to-frame absolute difference (original)
-DETECT_MODE = os.environ.get("DETECT_MODE", "baseline")
-RECORD_CODEC = os.environ.get("RECORD_CODEC", "libx264")  # libx264 | ffv1 | h264_v4l2m2m | copy
+RECORD_CODEC = os.environ.get("RECORD_CODEC", "libx264")
+RECORD_CRF = int(os.environ.get("RECORD_CRF", 30))
+SEGMENT_DUR_SEC = int(os.environ.get("SEGMENT_DURATION_SEC", 3600))  # 1 hour
 
 # ── Camera V4L2 controls (applied before FFmpeg starts) ───────────────────────
 CAM_AUTO_EXPOSURE = int(os.environ.get("CAM_AUTO_EXPOSURE", 1))   # 0=Auto, 1=Manual
@@ -38,8 +65,5 @@ CAM_SATURATION = int(os.environ.get("CAM_SATURATION", 0))     # 0-15
 CAM_WHITE_BALANCE_AUTOMATIC = int(os.environ.get("CAM_WHITE_BALANCE_AUTOMATIC", 0))
 CAM_BACKLIGHT_COMPENSATION = int(os.environ.get("CAM_BACKLIGHT_COMPENSATION", 1))  # 0 or 1
 
-FRAME_BYTES = WIDTH * HEIGHT  # single-channel (gray8) rawvideo
-PRE_FRAMES = int(PRE_SEC * FPS)
-POST_FRAMES = int(POST_SEC * FPS)
-
-os.makedirs(REC_DIR, exist_ok=True)
+FRAME_BYTES = WIDTH * HEIGHT
+PRE_FRAMES = int(float(os.environ.get("PRE_SEC", 10)) * FPS)  # ring buffer for preview
