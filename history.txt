@@ -1,0 +1,189 @@
+    1  ls
+    2  cd SeaFire/
+    3  python -m venv .venv
+    4  source .venv/bin/activate
+    5  pip install opencv-python
+    6  DETECT_ENABLED=0 CAMERA_INTERFACE=mipi python3 main.py
+    7  sudo raspi-config
+    8  libcamera
+    9  sudo apt install libcamera
+   10  rpicam
+   11  cat /etc/os-release
+   12  dpkg -l | grep libcamera
+   13  rpicam-hello --list-camera
+   14  rpicam-hello --list-cameras
+   15  dmesg | grep -i ov5647
+   16  sudo reboot
+   17  cd SeaFire/
+   18  source .venv/bin/activate
+   19  DETECT_ENABLED=0 python main.py 
+   20  pip install pillow
+   21  DETECT_ENABLED=0 python main.py 
+   22  git reset --hard
+   23  git statsu
+   24  cd SeaFire/
+   25  source .venv/bin/activate
+   26  DETECT_ENABLED=0 python main.py
+   27  pip install --no-cache-dir -r r
+   28  pip install --no-cache-dir -r requirements.txt
+   29  .venv/bin/python -c "from PIL import Image; print('OK:', hasattr(Image, 'frombytes'))"
+   30  python -c "import PIL; print(PIL.__file__)"
+   31  pip show Pillow
+   32  .venv/bin/pip install --force-reinstall --no-cache-dir Pillow
+   33  clear
+   34  DETECT_ENABLED=0 python main.py
+   35  cd SeaFire/
+   36  source .venv/bin/activate
+   37  DETECT_ENABLED=0 python main.py
+   38  top
+   39  ls
+   40  cd recordings/
+   41  ls
+   42  top
+   43  ls
+   44  rm -r cam0*
+   45  ls
+   46  rm -r cam1*
+   47  ls
+   48  top
+   49  ls
+   50  cd ../
+   51  ls
+   52  cd SeaFire/
+   53  ls
+   54  watch -n1 'python3 power.py'
+   55  vcgencmd pmic_read_adc | grep EXT
+   56  vcgencmd pmic_read_adc | grep -i 5v
+   57  watch -n1 'python3 power.py'
+   58  top
+   59  watch -n1 'python3 power.py'
+   60  cat /sys/class/power_supply/rpi-source/power_now
+   61  uname -a
+   62  ls -R /sys/class/power_supply
+   63  vcgencmd pmic_read_adc
+   64  ls
+   65  cd recordings/
+   66  ls
+   67  rm -r cam*
+   68  ls
+   69  top
+   70  DETECT_ENABLED=0 python main.py
+   71  cd sea
+   72  ls
+   73  cd SeaFire/
+   74  ls
+   75  source .venv/bin/activate
+   76  DETECT_ENABLED=0 python main.py
+   77  source .venv/bin/activate
+   78  DETECT_ENABLED=0 python main.py
+   79  top
+   80  ls
+   81  cd SeaFire/
+   82  sudo apt install python-opencv
+   83  pip install opencv
+   84  sudo apt install python3-opencv
+   85  python3 main.py 
+   86  ls
+   87  cd Desktop/
+   88  ls
+   89  cd ../Documents/
+   90  ls
+   91  cd SeaFire/
+   92  sudo RECORD_CODEC="libx264" CRF=28 DETECT_ENABLED=0 python main.py
+   93  sudo reboot
+   94  top
+   95  cd /media/
+   96  ls
+   97  cd rpi/
+   98  ls
+   99  cd SSD/
+  100  ls
+  101  cd seafire_recordings/
+  102  ls
+  103  cd Documents/SeaFire/
+  104  sudo python3 sbs_capture.py 
+  105  ls
+  106  rm -rf recordings_local/*
+  107  sudo rm -rf recordings_local/*
+  108  sudo python3 sbs_capture.py 
+  109  python3 main.py 
+  110  sudo python3 main.py 
+  111  python3 main.py 
+  112  sudo python3 main.py 
+  113  python3 merge_sbs.py 
+  114  python3 merge_sbs.py recordings_local/cam0_20260807_010144.mkv recordings_local/cam1_20260807_010144.mkv
+  115  sudo python3 merge_sbs.py recordings_local/cam0_20260807_010144.mkv recordings_local/cam1_20260807_010144.mkv
+  116  python3 merge_sbs.py 
+  117  sudo python3 main.py 
+  118  SYNC_OFFSET_MS=500 python3 main.py
+  119  sudo SYNC_OFFSET_MS=500 python3 main.py
+  120  ls
+  121  sudo rm -rf recordings_local/*
+  122  python3 main.py
+  123  sudo python3 main.py 
+  124  sudo python3 merge_sbs.py recordings_local/
+  125  sudo python3 main.py 
+  126  sudo python3 merge_sbs.py recordings_local/
+  127  sudo python3 main.py 
+  128  sudo python3 merge_sbs.py recordings_local/
+  129  sudo rm -rf recordings_local/*
+  130  sudo python3 main.py 
+  131  sudo python3 merge_sbs.py recordings_local/
+  132  sudo rm -rf recordings_local/*
+  133  sudo python3 main.py 
+  134  sudo python3 merge_sbs.py recordings_local/
+  135  sudo rm -rf recordings_local/*
+  136  sudo python3 main.py 
+  137  sudo python3 merge_sbs.py recordings_local/
+  138  sudo python3 main.py 
+  139  cd ~Documents/SeaFire 
+  140  ls -la
+  141  python3 main.py 
+  142  sudo python3 main.py 
+  143  cd
+  144  cd ~Documents/Seafire
+  145  pwd
+  146  ls -la ~
+  147  cd ~/Documents'
+  148  cd ~/Documents
+  149  cd ~/Documents/SeaFire
+  150  sudo python3 main.py 
+  151  cp ~/sbs_20260810_221050/SSD~
+  152  cp --help
+  153  cp sbs_20260810_221050/SSD
+  154  cp sbs_20260810_221050 SSD
+  155  cp recordings_local/sbs_20260810_221050 SSD
+  156  cp recordings_local SSD
+  157  cd ~/Documents/SeaFire/recordings_local
+  158  cp recordings_local SSD
+  159  cp sbs_20260810_221050.mkv  SSD
+  160  cp sbs_20260810_221050.mkv ssd
+  161  cp -v sbs_20260810_221050.mkv ssd
+  162  cp sbs_20260810_221050.mkv ssd
+  163  cd ~/SSD
+  164  cd rpi/media/ssd
+  165  cp sbs_20260810_221050.mkv rpi/media/SSD
+  166  cd rpi/media/SSD
+  167  rpi/media/ssd
+  168  cd ~rpi/media/ssd
+  169  cd ~/rpi/media/SSD
+  170  cd ~/rpi/media/ssd
+  171  cd rpi/
+  172  cd ~/rpi
+  173  cd ~/Documents/SeaFire
+  174  cd ~/Documents
+  175  cd ~/rpi
+  176  cd ~/media/rpi/SSD
+  177  cd ~/media
+  178  cd SeaFire/
+  179  cd recordings_local/*221050.mkv /media/rpi/SSD/
+  180  cp recordings_local/*221050.mkv /media/rpi/SSD/
+  181  sudo cp recordings_local/*221050.mkv /media/rpi/SSD/
+  182  ls\
+  183  cd /media/rpi/SSD/
+  184  ls -al
+  185  cd
+  186  cd Documents/
+  187  ls
+  188  cd SeaFire/
+  189  history > history.txt
