@@ -76,7 +76,6 @@ class StereoRecorder:
         self._retry_until: float = 0.0
         self._lock = Lock()
 
-        self._ssd_ready = _ssd_ready()
         self._transfer_q: Queue = Queue()
         self._transfer_thread = Thread(target=self._transfer_loop, daemon=True)
         self._transfer_thread.start()
@@ -90,14 +89,25 @@ class StereoRecorder:
                 break
             if not os.path.exists(src) or os.path.getsize(src) < 10000:
                 continue
-            if not self._ssd_ready:
+            if not _ssd_ready():
                 continue
+            os.makedirs(SSD_DIR, exist_ok=True)
             dst = os.path.join(SSD_DIR, os.path.basename(src))
             try:
                 size_mb = os.path.getsize(src) / 1_000_000
                 print(f"[transfer] {os.path.basename(src)} ({size_mb:.0f} MB) -> SSD ...")
-                shutil.move(src, dst)
-                print(f"[transfer] done: {os.path.basename(dst)}")
+                # Copy + verify + delete — not shutil.move.
+                # move() on cross-fs copies then deletes, but ntfs-3g write
+                # caching means the copy can succeed in the buffer and the
+                # source gets deleted before data hits the platter.
+                shutil.copy2(src, dst)
+                os.sync()  # flush all filesystem buffers
+                if os.path.getsize(dst) == os.path.getsize(src):
+                    os.remove(src)
+                    print(f"[transfer] done: {os.path.basename(dst)}")
+                else:
+                    print(f"[transfer] FAILED: size mismatch, keeping local copy")
+                    os.remove(dst)
             except Exception as e:
                 print(f"[transfer] FAILED: {src} — {e}")
 

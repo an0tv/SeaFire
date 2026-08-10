@@ -15,16 +15,62 @@ Runs on Raspberry Pi 5 with two USB UVC cameras.
   unmounted
 - **Power:** 5V/5A USB-PD supply (official Pi 5 PSU or 25W+ charger)
 
-## Quick Start
+## Setup
+
+### 1. Install dependencies
 
 ```bash
 cd ~/Documents/SeaFire
+sudo apt install ffmpeg v4l-utils ntfs-3g -y
 pip install -r requirements.txt
-sudo python3 main.py
 ```
 
-Output lands in `recordings_local/` as `sbs_YYYYMMDD_HHMMSS.mkv` (3840×1080,
-cam0 left, cam1 right). Completed segments auto-transfer to SSD if mounted.
+### 2. USB power (Pi 5 only)
+
+Add to `/boot/firmware/config.txt` and reboot:
+
+```
+[all]
+usb_max_current_enable=1
+```
+
+Without a 5A PSU this line is ignored.  For battery deployments (IP2369 BMS)
+power the Pi via GPIO pins 2/4 (+5V) and 6/9 (GND) to bypass USB-PD
+negotiation, and route camera VBUS directly from the 5V rail.
+
+### 3. SSD — auto-mount on boot
+
+The SSD must be formatted (ext4 recommended; NTFS works but has write-cache
+risks — see Troubleshooting).  Plug it in, find its device, then add to fstab:
+
+```bash
+lsblk                         # identify the SSD (e.g. /dev/sda1)
+sudo blkid /dev/sda1          # check filesystem type
+
+# For ext4:
+echo '/dev/sda1 /media/rpi/SSD ext4 defaults,nofail 0 0' | sudo tee -a /etc/fstab
+
+# For NTFS:
+echo '/dev/sda1 /media/rpi/SSD ntfs-3g defaults,nofail 0 0' | sudo tee -a /etc/fstab
+
+sudo systemctl daemon-reload
+sudo mount -a                 # mount now (survives reboots)
+```
+
+If `mount -a` fails with NTFS metadata errors, the drive was unplugged
+uncleanly from Windows.  Run `sudo ntfsfix /dev/sda1` then try again.
+
+### 4. Verify
+
+```bash
+ls /dev/video*                # should see Arducam entries
+ls /media/rpi/SSD             # SSD mounted
+sudo python3 main.py          # start recording
+# Point a browser at http://<pi-ip>:8080 for live preview
+```
+
+Output lands in `recordings_local/` as `sbs_YYYYMMDD_HHMMSS.mkv`.
+Completed segments auto-transfer to `/media/rpi/SSD/seafire_recordings/`.
 
 ## How It Works
 
@@ -85,21 +131,6 @@ All settings via environment variables.
 |---|---|---|
 | `PREVIEW_PORT` | 8080 | MJPEG preview port; `0` to disable |
 
-## Pi 5 USB Power
-
-The Pi 5 PMIC limits USB current to ~768mA unless it detects a 5A PSU. Add to
-`/boot/firmware/config.txt`:
-
-```
-[all]
-usb_max_current_enable=1
-```
-
-Then `sudo reboot`. Without a 5A PSU this setting is ignored.
-
-For battery deployments (IP2369 BMS): power via GPIO pins 2/4 (+5V) and 6/9
-(GND) to bypass USB-PD negotiation. Route camera VBUS directly from the 5V rail.
-
 ## Power Monitoring
 
 ```bash
@@ -122,6 +153,20 @@ SeaFire/
 
 ## Troubleshooting
 
+**SSD auto-mount not working after reboot** — run `sudo systemctl daemon-reload`
+then `sudo mount -a`.  If the fstab line was added before daemon-reload, systemd
+may have cached the old version.
+
+**NTFS drive won't mount** — the drive was probably unplugged from Windows
+without ejecting.  Run `sudo ntfsfix /dev/sda1` then `sudo mount -a`.
+Reformatting to ext4 (`sudo mkfs.ext4 -L SSD /dev/sda1`) eliminates this
+permanently but erases all data.
+
+**Recordings not appearing on SSD** — the SSD may have dropped during recording.
+The transfer copies with `os.sync()` to flush buffers before deleting the local
+copy.  If the transfer log says "FAILED: size mismatch", the local copy is
+preserved.  Check `recordings_local/` as a fallback.
+
 **"Device or resource busy"** — stale kernel handle:
 
 ```bash
@@ -131,9 +176,6 @@ echo "2-1" | sudo tee /sys/bus/usb/drivers/usb/bind
 ```
 
 **One camera at 0 FPS** — swap USB ports to isolate camera vs. port.
-
-**SSD not detected** — `lsblk`, check `/media/rpi/SSD`. Files stay local if
-unmounted.
 
 **Cameras show different exposure** — set `CAM_AUTO_EXPOSURE=1` (Manual) with
 fixed `CAM_EXPOSURE_ABSOLUTE` so both use identical settings.

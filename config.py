@@ -52,7 +52,7 @@ elif not _check_dir(SSD_DIR, "SSD transfer"):
 PREVIEW_PORT = int(os.environ.get("PREVIEW_PORT", 8080))
 RECORD_CODEC = os.environ.get("RECORD_CODEC", "libx264")
 RECORD_CRF = int(os.environ.get("RECORD_CRF", 30))
-SEGMENT_DUR_SEC = int(os.environ.get("SEGMENT_DURATION_SEC", 3600))  # 1 hour
+SEGMENT_DUR_SEC = int(os.environ.get("SEGMENT_DURATION_SEC", 120))  # 1 hour
 
 # ── Camera V4L2 controls (applied before FFmpeg starts) ───────────────────────
 CAM_AUTO_EXPOSURE = int(os.environ.get("CAM_AUTO_EXPOSURE", 1))   # 0=Auto, 1=Manual
