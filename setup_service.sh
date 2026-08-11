@@ -1,7 +1,7 @@
 #!/bin/bash
 # Setup Seafire as a systemd service on Raspberry Pi.
 # Run as root:  sudo bash setup_service.sh
-# Assumes the project is at /home/pi/seafire.
+# Assumes the project is at /home/rpi/Documents/SeaFire.
 #
 # No UUID or fstab needed — the service auto-detects and mounts
 # any unmounted ext4/exfat/vfat/ntfs drive at /media/rpi/SSD on boot.
