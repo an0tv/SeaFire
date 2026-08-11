@@ -43,7 +43,9 @@ StandardError=journal
 SyslogIdentifier=seafire
 
 # Environment — see config.py for defaults
-Environment=RECORDINGS_DIR=/media/rpi/SSD/seafire_recordings
+# LOCAL_DIR: where segments are recorded live (SD card)
+Environment=RECORDINGS_DIR=/home/pi/SeaFire/local_recordings
+# SSD_DIR: where completed segments are copied to (SSD)
 Environment=SSD_RECORDINGS_DIR=/media/rpi/SSD/seafire_recordings
 Environment=CAPTURE_WIDTH=1920
 Environment=CAPTURE_HEIGHT=1080
@@ -52,7 +54,7 @@ Environment=PRE_SEC=5
 Environment=PREVIEW_PORT=8080
 Environment=RECORD_CODEC=libx264
 Environment=RECORD_CRF=30
-Environment=SEGMENT_DURATION_SEC=3600
+Environment=SEGMENT_DURATION_SEC=1800
 
 [Install]
 WantedBy=multi-user.target
