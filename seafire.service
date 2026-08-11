@@ -1,7 +1,6 @@
 [Unit]
 Description=Seafire Stereo Bioluminescence Recorder
 After=local-fs.target
-RequiresMountsFor=/media/rpi/SSD
 Wants=v4l2.service
 
 [Service]
@@ -10,51 +9,55 @@ User=root
 Group=root
 WorkingDirectory=/home/pi/seafire
 
-# ── Wait for SSD ──────────────────────────────────────────────────────────
-ExecStartPre=-/bin/sh -c 'echo "[seafire] checking SSD..."; \
-  while ! mountpoint -q /media/rpi/SSD; do \
-    echo "[seafire]   waiting for SSD at /media/rpi/SSD..."; \
+# ── Mount SSD (any unmounted ext4/exfat/ntfs/vfat drive) ─────────────────
+ExecStartPre=-/bin/sh -c 'echo "[seafire] looking for SSD..."; \
+  mkdir -p /media/rpi/SSD; \
+  while true; do \
+    DEV=$(lsblk -no NAME,FSTYPE,MOUNTPOINT -l 2>/dev/null | \
+          awk "$$2 ~ /^(ext4|exfat|vfat|ntfs)$$/ && $$3 == \"\" {print \"/dev/\"$$1; exit}"); \
+    if [ -n "$$DEV" ]; then \
+      mount "$$DEV" /media/rpi/SSD 2>/dev/null && \
+        echo "[seafire]   mounted $$DEV -> /media/rpi/SSD" && break; \
+    fi; \
+    echo "[seafire]   no unmounted drive found, retrying in 5s..."; \
     sleep 5; \
-  done; echo "[seafire]   SSD mounted"'
+  done'
 ExecStartPre=/bin/sh -c 'mkdir -p /media/rpi/SSD/seafire_recordings'
 
 # ── Wait for cameras ──────────────────────────────────────────────────────
 ExecStartPre=-/bin/sh -c 'echo "[seafire] checking cameras..."; \
   while true; do \
     count=$(v4l2-ctl --list-devices 2>/dev/null | grep -c Arducam || true); \
-    if [ "$count" -ge 2 ]; then \
-      echo "[seafire]   found $count Arducam(s)"; \
+    if [ "$$count" -ge 2 ]; then \
+      echo "[seafire]   $$count Arducam(s) found"; \
       break; \
     fi; \
-    echo "[seafire]   found $count Arducam(s), waiting for 2+..."; \
+    echo "[seafire]   $$count Arducam(s), waiting for 2+..."; \
     sleep 5; \
   done'
 
-# ── Run the recorder ──────────────────────────────────────────────────────
+# ── Run ───────────────────────────────────────────────────────────────────
 ExecStart=/usr/bin/python3 -u /home/pi/seafire/main.py
 
-# Restart on crash with backoff
 Restart=always
 RestartSec=10
 
-# Logging
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=seafire
 
-# Environment — see config.py for defaults
 # LOCAL_DIR: where segments are recorded live (SD card)
-Environment=RECORDINGS_DIR=/home/pi/SeaFire/local_recordings
-# SSD_DIR: where completed segments are copied to (SSD)
+Environment=RECORDINGS_DIR=/home/pi/seafire/recordings
+# SSD_DIR: where completed segments are copied to
 Environment=SSD_RECORDINGS_DIR=/media/rpi/SSD/seafire_recordings
 Environment=CAPTURE_WIDTH=1920
 Environment=CAPTURE_HEIGHT=1080
 Environment=CAPTURE_FPS=15
-Environment=PRE_SEC=5
+Environment=PRE_SEC=2
 Environment=PREVIEW_PORT=8080
 Environment=RECORD_CODEC=libx264
 Environment=RECORD_CRF=30
-Environment=SEGMENT_DURATION_SEC=1800
+Environment=SEGMENT_DURATION_SEC=120
 
 [Install]
 WantedBy=multi-user.target
