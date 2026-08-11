@@ -8,7 +8,7 @@
 
 set -euo pipefail
 
-PROJECT_DIR="/home/pi/seafire"
+PROJECT_DIR="/home/rpi/Documents/SeaFire"
 SERVICE_NAME="seafire"
 
 echo "=== Seafire systemd service setup ==="
@@ -37,6 +37,7 @@ deactivate
 echo ""
 echo "[3/3] Installing systemd service..."
 
+chmod +x "${PROJECT_DIR}/mount_ssd.sh"
 cp "${PROJECT_DIR}/seafire.service" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable "$SERVICE_NAME"
