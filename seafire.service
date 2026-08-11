@@ -1,0 +1,58 @@
+[Unit]
+Description=Seafire Stereo Bioluminescence Recorder
+After=local-fs.target
+RequiresMountsFor=/media/rpi/SSD
+Wants=v4l2.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/home/pi/seafire
+
+# ── Wait for SSD ──────────────────────────────────────────────────────────
+ExecStartPre=-/bin/sh -c 'echo "[seafire] checking SSD..."; \
+  while ! mountpoint -q /media/rpi/SSD; do \
+    echo "[seafire]   waiting for SSD at /media/rpi/SSD..."; \
+    sleep 5; \
+  done; echo "[seafire]   SSD mounted"'
+ExecStartPre=/bin/sh -c 'mkdir -p /media/rpi/SSD/seafire_recordings'
+
+# ── Wait for cameras ──────────────────────────────────────────────────────
+ExecStartPre=-/bin/sh -c 'echo "[seafire] checking cameras..."; \
+  while true; do \
+    count=$(v4l2-ctl --list-devices 2>/dev/null | grep -c Arducam || true); \
+    if [ "$count" -ge 2 ]; then \
+      echo "[seafire]   found $count Arducam(s)"; \
+      break; \
+    fi; \
+    echo "[seafire]   found $count Arducam(s), waiting for 2+..."; \
+    sleep 5; \
+  done'
+
+# ── Run the recorder ──────────────────────────────────────────────────────
+ExecStart=/usr/bin/python3 -u /home/pi/seafire/main.py
+
+# Restart on crash with backoff
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=seafire
+
+# Environment — see config.py for defaults
+Environment=RECORDINGS_DIR=/media/rpi/SSD/seafire_recordings
+Environment=SSD_RECORDINGS_DIR=/media/rpi/SSD/seafire_recordings
+Environment=CAPTURE_WIDTH=1920
+Environment=CAPTURE_HEIGHT=1080
+Environment=CAPTURE_FPS=15
+Environment=PRE_SEC=5
+Environment=PREVIEW_PORT=8080
+Environment=RECORD_CODEC=libx264
+Environment=RECORD_CRF=30
+Environment=SEGMENT_DURATION_SEC=3600
+
+[Install]
+WantedBy=multi-user.target
