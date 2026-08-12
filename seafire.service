@@ -35,17 +35,5 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=seafire
 
-# Environment
-Environment=RECORDINGS_DIR=/home/rpi/Documents/SeaFire/recordings
-Environment=SSD_RECORDINGS_DIR=/media/rpi/SSD/seafire_recordings
-Environment=CAPTURE_WIDTH=1920
-Environment=CAPTURE_HEIGHT=1080
-Environment=CAPTURE_FPS=15
-Environment=PRE_SEC=2
-Environment=PREVIEW_PORT=8080
-Environment=RECORD_CODEC=libx264
-Environment=RECORD_CRF=30
-Environment=SEGMENT_DURATION_SEC=120
-
 [Install]
 WantedBy=multi-user.target

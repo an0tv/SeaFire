@@ -1,0 +1,30 @@
+# Seafire configuration.
+# Place this file at /media/rpi/SSD/seafire_recordings/config.txt
+# Lines are KEY=VALUE.  #-comments and blank lines are ignored.
+# Environment variables take priority over this file.
+
+# ── Recording ────────────────────────────────────────────────────────────
+RECORDINGS_DIR=/home/rpi/Documents/SeaFire/recordings
+SSD_RECORDINGS_DIR=/media/rpi/SSD/seafire_recordings
+RECORD_CODEC=libx264
+RECORD_CRF=30
+SEGMENT_DURATION_SEC=120
+
+# ── Capture ──────────────────────────────────────────────────────────────
+CAPTURE_WIDTH=1920
+CAPTURE_HEIGHT=1080
+CAPTURE_FPS=15
+PRE_SEC=10
+
+# ── Preview ──────────────────────────────────────────────────────────────
+PREVIEW_PORT=8080
+
+# ── Camera V4L2 controls ─────────────────────────────────────────────────
+CAM_AUTO_EXPOSURE=1
+CAM_EXPOSURE_ABSOLUTE=5000
+CAM_GAIN=100
+CAM_BRIGHTNESS=64
+CAM_CONTRAST=20
+CAM_SATURATION=0
+CAM_WHITE_BALANCE_AUTOMATIC=0
+CAM_BACKLIGHT_COMPENSATION=1

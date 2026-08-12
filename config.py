@@ -1,9 +1,47 @@
 """
-Seafire configuration — all constants from environment variables.
+Seafire configuration — constants from environment variables.
+
+On startup, loads overrides from a config.txt file on the SSD
+(if present).  Environment variables take priority over the file.
 """
 
 import os
 import sys
+
+
+def _load_config(path: str):
+    """Load KEY=VALUE lines from a file into os.environ.
+
+    Existing env vars are NOT overwritten — they take priority.
+    Empty lines and #-comments are ignored.
+    """
+    if not os.path.isfile(path):
+        return
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                key = key.strip()
+                val = val.strip()
+                if key not in os.environ:
+                    os.environ[key] = val
+        print(f"[config] loaded {path}")
+    except Exception as e:
+        print(f"[config] WARNING: could not read {path}: {e}")
+
+
+# Load from SSD config file before reading any variables.
+# Env vars (set by systemd or command line) always win.
+_CONFIG_PATH = os.environ.get(
+    "SEAFIRE_CONFIG",
+    "/media/rpi/SSD/seafire_recordings/config.txt",
+)
+_load_config(_CONFIG_PATH)
 
 # ── Core capture settings ─────────────────────────────────────────────────────
 WIDTH = int(os.environ.get("CAPTURE_WIDTH", 1920))
