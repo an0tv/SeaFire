@@ -81,6 +81,7 @@ if [ "$BACKEND" = "nm" ]; then
     nmcli con add type wifi ifname "$INTERFACE" con-name seafire-ap \
         autoconnect yes ssid "$SSID"
     nmcli con modify seafire-ap \
+        connection.interface-name "$INTERFACE" \
         802-11-wireless.mode ap \
         802-11-wireless.band bg \
         802-11-wireless.channel 7 \
