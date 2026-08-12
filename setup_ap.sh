@@ -10,13 +10,11 @@
 
 set -euo pipefail
 
-SSID="${SEAFIRE_SSID:-Seafire}"
-PASSWORD="${SEAFIRE_PASS:-bioluminescence}"
-AP_IP="192.168.4.1"
-INTERFACE="wlan0"
+# Usage: sudo bash setup_ap.sh [SSID] [PASSWORD]
+#        sudo bash setup_ap.sh --undo
 
 # Detect networking backend
-if systemctl list-units --all 2>/dev/null | grep -q NetworkManager; then
+if command -v nmcli >/dev/null 2>&1; then
     BACKEND="nm"
 else
     BACKEND="dhcpcd"
@@ -30,7 +28,6 @@ if [ "${1:-}" = "--undo" ]; then
         systemctl stop dnsmasq 2>/dev/null || true
         systemctl disable dnsmasq 2>/dev/null || true
         rm -f /etc/dnsmasq.d/seafire.conf
-        # Re-enable normal WiFi client
         nmcli radio wifi on
     else
         systemctl stop hostapd dnsmasq 2>/dev/null || true
@@ -43,6 +40,11 @@ if [ "${1:-}" = "--undo" ]; then
     echo "Done. WiFi back to normal client mode."
     exit 0
 fi
+
+SSID="${1:-Seafire}"
+PASSWORD="${2:-bioluminescence}"
+AP_IP="192.168.4.1"
+INTERFACE="wlan0"
 
 echo "=== Seafire WiFi Access Point ==="
 echo "  Backend:   $BACKEND"
