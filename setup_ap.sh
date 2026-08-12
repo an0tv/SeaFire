@@ -14,10 +14,12 @@ set -euo pipefail
 #        sudo bash setup_ap.sh --undo
 
 # Detect networking backend
-if command -v nmcli >/dev/null 2>&1; then
+if systemctl is-active --quiet NetworkManager 2>/dev/null; then
     BACKEND="nm"
-else
+elif systemctl is-active --quiet dhcpcd 2>/dev/null; then
     BACKEND="dhcpcd"
+else
+    BACKEND="manual"  # systemd-networkd or other — configure IP manually
 fi
 
 if [ "${1:-}" = "--undo" ]; then
@@ -29,12 +31,17 @@ if [ "${1:-}" = "--undo" ]; then
         systemctl disable dnsmasq 2>/dev/null || true
         rm -f /etc/dnsmasq.d/seafire.conf
         nmcli radio wifi on
-    else
+    elif [ "$BACKEND" = "dhcpcd" ]; then
         systemctl stop hostapd dnsmasq 2>/dev/null || true
         systemctl disable hostapd dnsmasq 2>/dev/null || true
         rm -f /etc/hostapd/hostapd.conf /etc/dnsmasq.d/seafire.conf
         sed -i '/^interface wlan0/d; /^static ip_address=192\.168\.4/d; /^nohook wpa_supplicant/d' /etc/dhcpcd.conf 2>/dev/null || true
         systemctl restart dhcpcd 2>/dev/null || true
+    else
+        systemctl stop hostapd dnsmasq 2>/dev/null || true
+        systemctl disable hostapd dnsmasq 2>/dev/null || true
+        rm -f /etc/hostapd/hostapd.conf /etc/dnsmasq.d/seafire.conf
+        ip addr del "$AP_IP/24" dev "$INTERFACE" 2>/dev/null || true
     fi
     rfkill unblock wifi
     echo "Done. WiFi back to normal client mode."
@@ -64,7 +71,6 @@ else
 fi
 
 systemctl stop hostapd dnsmasq 2>/dev/null || true
-systemctl stop NetworkManager 2>/dev/null || true  # brief stop for clean config
 
 # ── 2. WiFi AP ───────────────────────────────────────────────────────────
 echo "[2/4] Configuring WiFi..."
@@ -81,7 +87,7 @@ if [ "$BACKEND" = "nm" ]; then
         ipv4.method shared ipv4.addresses "$AP_IP/24" \
         wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$PASSWORD"
 else
-    # Bullseye: hostapd for AP, dhcpcd for static IP
+    # hostapd for the AP itself
     cat > /etc/hostapd/hostapd.conf <<EOF
 interface=$INTERFACE
 driver=nl80211
@@ -106,13 +112,15 @@ EOF
     systemctl unmask hostapd 2>/dev/null || true
     systemctl enable hostapd
 
-    # Static IP via dhcpcd
-    sed -i '/^interface wlan0/d; /^static ip_address=192\.168\.4/d; /^nohook wpa_supplicant/d' /etc/dhcpcd.conf 2>/dev/null || true
-    cat >> /etc/dhcpcd.conf <<EOF
+    # Static IP
+    if [ "$BACKEND" = "dhcpcd" ]; then
+        sed -i '/^interface wlan0/d; /^static ip_address=192\.168\.4/d; /^nohook wpa_supplicant/d' /etc/dhcpcd.conf 2>/dev/null || true
+        cat >> /etc/dhcpcd.conf <<EOF
 interface $INTERFACE
     static ip_address=$AP_IP/24
     nohook wpa_supplicant
 EOF
+    fi
 fi
 
 # ── 3. dnsmasq (DHCP server) ─────────────────────────────────────────────
@@ -140,9 +148,14 @@ rfkill unblock wifi
 
 if [ "$BACKEND" = "nm" ]; then
     nmcli con up seafire-ap
-else
+elif [ "$BACKEND" = "dhcpcd" ]; then
     systemctl restart dhcpcd
     sleep 2
+    systemctl start hostapd
+else
+    # systemd-networkd or other — configure IP manually
+    ip addr add "$AP_IP/24" dev "$INTERFACE" 2>/dev/null || true
+    ip link set "$INTERFACE" up
     systemctl start hostapd
 fi
 
