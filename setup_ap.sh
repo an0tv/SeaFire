@@ -33,6 +33,7 @@ if [ "${1:-}" = "--undo" ]; then
     ip addr del "$AP_IP/24" dev "$INTERFACE" 2>/dev/null || true
 
     if [ "$BACKEND" = "nm" ]; then
+        nmcli con delete seafire-ap 2>/dev/null || true
         nmcli device set "$INTERFACE" managed yes 2>/dev/null || true
     elif [ "$BACKEND" = "dhcpcd" ]; then
         sed -i '/^interface wlan0/d; /^static ip_address=192\.168\.4/d; /^nohook wpa_supplicant/d' /etc/dhcpcd.conf 2>/dev/null || true
@@ -85,6 +86,7 @@ driver=nl80211
 ssid=$SSID
 hw_mode=g
 channel=7
+country_code=US
 wmm_enabled=0
 macaddr_acl=0
 auth_algs=1
@@ -92,7 +94,6 @@ ignore_broadcast_ssid=0
 wpa=2
 wpa_passphrase=$PASSWORD
 wpa_key_mgmt=WPA-PSK
-wpa_pairwise=TKIP
 rsn_pairwise=CCMP
 EOF
 
