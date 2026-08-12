@@ -3,15 +3,18 @@
 # Connect to "Seafire" network, then open http://192.168.4.1:8080
 # for the live preview.  Internet access is NOT shared.
 #
-# Works on RPi OS Bullseye (dhcpcd) and Bookworm (NetworkManager).
+# Supports:
+#   - NetworkManager (Bookworm) — native AP mode, DHCP built in
+#   - dhcpcd + hostapd      (Bullseye) — hostapd AP + dnsmasq DHCP
+#   - manual IP + hostapd   (headless Bookworm)
 #
-# Run as root:  sudo bash setup_ap.sh
-# To remove:    sudo bash setup_ap.sh --undo
+# Usage:  sudo bash setup_ap.sh [SSID] [PASSWORD]
+#         sudo bash setup_ap.sh --undo
 
 set -euo pipefail
 
-# Usage: sudo bash setup_ap.sh [SSID] [PASSWORD]
-#        sudo bash setup_ap.sh --undo
+AP_IP="192.168.4.1"
+INTERFACE="wlan0"
 
 # Detect networking backend
 if systemctl is-active --quiet NetworkManager 2>/dev/null; then
@@ -19,64 +22,64 @@ if systemctl is-active --quiet NetworkManager 2>/dev/null; then
 elif systemctl is-active --quiet dhcpcd 2>/dev/null; then
     BACKEND="dhcpcd"
 else
-    BACKEND="manual"  # systemd-networkd or other — configure IP manually
+    BACKEND="manual"
 fi
 
+# ── Undo ──────────────────────────────────────────────────────────────────
 if [ "${1:-}" = "--undo" ]; then
     echo "=== Removing access point ==="
+    systemctl stop hostapd dnsmasq 2>/dev/null || true
+    systemctl disable hostapd dnsmasq 2>/dev/null || true
+    rm -f /etc/hostapd/hostapd.conf /etc/dnsmasq.d/seafire.conf
 
     if [ "$BACKEND" = "nm" ]; then
         nmcli con delete seafire-ap 2>/dev/null || true
-        systemctl stop dnsmasq 2>/dev/null || true
-        systemctl disable dnsmasq 2>/dev/null || true
-        rm -f /etc/dnsmasq.d/seafire.conf
-        nmcli radio wifi on
     elif [ "$BACKEND" = "dhcpcd" ]; then
-        systemctl stop hostapd dnsmasq 2>/dev/null || true
-        systemctl disable hostapd dnsmasq 2>/dev/null || true
-        rm -f /etc/hostapd/hostapd.conf /etc/dnsmasq.d/seafire.conf
         sed -i '/^interface wlan0/d; /^static ip_address=192\.168\.4/d; /^nohook wpa_supplicant/d' /etc/dhcpcd.conf 2>/dev/null || true
         systemctl restart dhcpcd 2>/dev/null || true
     else
-        systemctl stop hostapd dnsmasq 2>/dev/null || true
-        systemctl disable hostapd dnsmasq 2>/dev/null || true
-        rm -f /etc/hostapd/hostapd.conf /etc/dnsmasq.d/seafire.conf
         ip addr del "$AP_IP/24" dev "$INTERFACE" 2>/dev/null || true
     fi
+
     rfkill unblock wifi
+    ip link set "$INTERFACE" up 2>/dev/null || true
     echo "Done. WiFi back to normal client mode."
     exit 0
 fi
 
 SSID="${1:-Seafire}"
 PASSWORD="${2:-bioluminescence}"
-AP_IP="192.168.4.1"
-INTERFACE="wlan0"
+
+# WPA2 requires 8-63 chars
+if [ "${#PASSWORD}" -lt 8 ]; then
+    echo "ERROR: password must be at least 8 characters."
+    exit 1
+fi
 
 echo "=== Seafire WiFi Access Point ==="
 echo "  Backend:   $BACKEND"
 echo "  SSID:      $SSID"
-echo "  Password:  $PASSWORD"
 echo "  Preview:   http://$AP_IP:8080"
 echo ""
 
 # ── 1. Install packages ──────────────────────────────────────────────────
-echo "[1/4] Installing packages..."
+echo "[1/3] Installing packages..."
 apt-get update -qq
 
 if [ "$BACKEND" = "nm" ]; then
-    apt-get install -y -qq dnsmasq
+    # NetworkManager shared mode provides DHCP itself — no dnsmasq needed
+    :
 else
     apt-get install -y -qq hostapd dnsmasq
 fi
 
 systemctl stop hostapd dnsmasq 2>/dev/null || true
 
-# ── 2. WiFi AP ───────────────────────────────────────────────────────────
-echo "[2/4] Configuring WiFi..."
+# ── 2. Configure AP ──────────────────────────────────────────────────────
+echo "[2/3] Configuring AP..."
 
 if [ "$BACKEND" = "nm" ]; then
-    # Bookworm: NetworkManager AP + dnsmasq for DHCP
+    # ── NetworkManager native AP ──────────────────────────────────────
     nmcli con delete seafire-ap 2>/dev/null || true
     nmcli con add type wifi ifname "$INTERFACE" con-name seafire-ap \
         autoconnect yes ssid "$SSID"
@@ -88,7 +91,7 @@ if [ "$BACKEND" = "nm" ]; then
         ipv4.method shared ipv4.addresses "$AP_IP/24" \
         wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$PASSWORD"
 else
-    # hostapd for the AP itself
+    # ── hostapd + dnsmasq ─────────────────────────────────────────────
     cat > /etc/hostapd/hostapd.conf <<EOF
 interface=$INTERFACE
 driver=nl80211
@@ -122,29 +125,21 @@ interface $INTERFACE
     nohook wpa_supplicant
 EOF
     fi
-fi
 
-# ── 3. dnsmasq (DHCP server) ─────────────────────────────────────────────
-echo "[3/4] Configuring DHCP..."
-if [ ! -f /etc/dnsmasq.conf.orig ]; then
-    cp /etc/dnsmasq.conf /etc/dnsmasq.conf.orig 2>/dev/null || true
-fi
-
-cat > /etc/dnsmasq.d/seafire.conf <<EOF
+    # dnsmasq DHCP
+    if [ ! -f /etc/dnsmasq.conf.orig ]; then
+        cp /etc/dnsmasq.conf /etc/dnsmasq.conf.orig 2>/dev/null || true
+    fi
+    cat > /etc/dnsmasq.d/seafire.conf <<EOF
 interface=$INTERFACE
 dhcp-range=192.168.4.2,192.168.4.50,255.255.255.0,24h
 address=/#/$AP_IP
 EOF
-
-# On Bookworm, prevent NM from touching dnsmasq's interface
-if [ "$BACKEND" = "nm" ]; then
-    nmcli device set "$INTERFACE" managed no 2>/dev/null || true
+    systemctl enable dnsmasq
 fi
 
-systemctl enable dnsmasq
-
-# ── 4. Start ─────────────────────────────────────────────────────────────
-echo "[4/4] Starting services..."
+# ── 3. Start ─────────────────────────────────────────────────────────────
+echo "[3/3] Starting..."
 rfkill unblock wifi
 ip link set "$INTERFACE" up 2>/dev/null || true
 sleep 1
@@ -154,15 +149,11 @@ if [ "$BACKEND" = "nm" ]; then
 elif [ "$BACKEND" = "dhcpcd" ]; then
     systemctl restart dhcpcd
     sleep 2
-    systemctl start hostapd
+    systemctl start hostapd dnsmasq
 else
-    # systemd-networkd or other — configure IP manually
     ip addr add "$AP_IP/24" dev "$INTERFACE" 2>/dev/null || true
-    ip link set "$INTERFACE" up
-    systemctl start hostapd
+    systemctl start hostapd dnsmasq
 fi
-
-systemctl start dnsmasq
 
 echo ""
 echo "Done. The Pi is now an access point."
