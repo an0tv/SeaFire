@@ -145,6 +145,8 @@ systemctl enable dnsmasq
 # ── 4. Start ─────────────────────────────────────────────────────────────
 echo "[4/4] Starting services..."
 rfkill unblock wifi
+ip link set "$INTERFACE" up 2>/dev/null || true
+sleep 1
 
 if [ "$BACKEND" = "nm" ]; then
     nmcli con up seafire-ap
