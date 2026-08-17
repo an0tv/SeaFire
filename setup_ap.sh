@@ -146,6 +146,10 @@ echo "[4/4] Starting..."
 cat > /etc/systemd/system/seafire-ap-ip.service <<EOF
 [Unit]
 Description=Seafire access point interface
+# Wait for the Wi-Fi driver to actually create the interface, otherwise the
+# ExecStart commands below race the driver at boot and the oneshot service
+# fails permanently (no IP assigned -> AP never comes up).
+After=sys-subsystem-net-devices-$INTERFACE.device
 Before=hostapd.service dnsmasq.service
 
 [Service]
