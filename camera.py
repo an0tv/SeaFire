@@ -76,7 +76,21 @@ def _find_cameras_macos() -> List[str]:
 
 
 def _find_cameras_linux() -> List[str]:
-    """Find USB camera video capture devices via v4l2-ctl."""
+    """Find Arducam cameras, preferring stable udev symlinks.
+
+    If setup_cameras.sh has bound cameras to physical USB ports,
+    /dev/seafire-left and /dev/seafire-right exist and are used
+    first.  Otherwise we fall back to USB enumeration order.
+    """
+    # Stable physical-port symlinks (left/right, setup via setup_cameras.sh)
+    stable: List[str] = []
+    for name in ("seafire-left", "seafire-right"):
+        path = f"/dev/{name}"
+        if os.path.exists(path):
+            stable.append(path)
+    if len(stable) == 2:
+        return stable
+
     try:
         out = subprocess.run(
             ["v4l2-ctl", "--list-devices"], capture_output=True, timeout=5
