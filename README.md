@@ -60,7 +60,29 @@ sudo mount -a                 # mount now (survives reboots)
 If `mount -a` fails with NTFS metadata errors, the drive was unplugged
 uncleanly from Windows.  Run `sudo ntfsfix /dev/sda1` then try again.
 
-### 4. Verify
+### 4. Bind cameras to left/right (stable across reboots)
+
+USB cameras are enumerated in a different order each boot, which would swap
+left and right between runs. Bind each camera to a physical USB port so the
+mapping survives reboots:
+
+```bash
+# List cameras and their physical USB ports:
+sudo bash setup_cameras.sh
+
+# Cover the LEFT lens, note which /dev/videoX it is in the preview, then bind
+# LEFT and RIGHT by their USB ports (values from the listing above):
+sudo bash setup_cameras.sh 1-1.2 1-1.4
+
+# Restart the service to pick up the new mapping:
+sudo systemctl restart seafire
+```
+
+This writes `/etc/udev/rules.d/99-seafire-cameras.rules`, which creates
+`/dev/seafire-left` and `/dev/seafire-right`. The recorder always assigns
+cam0 = left and cam1 = right. Undo with `sudo bash setup_cameras.sh --undo`.
+
+### 5. Verify
 
 ```bash
 ls /dev/video*                # should see Arducam entries

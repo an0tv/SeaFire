@@ -111,7 +111,10 @@ ssid=$SSID
 hw_mode=g
 channel=$CHANNEL
 country_code=US
-wmm_enabled=0
+# Modern clients (iOS/Android) require WMM and 802.11n for WPA2.
+ieee80211n=1
+wmm_enabled=1
+ht_capab=[SHORT-GI-20]
 macaddr_acl=0
 auth_algs=1
 ignore_broadcast_ssid=0
@@ -157,6 +160,12 @@ Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/sbin/rfkill unblock wifi
 ExecStart=/usr/sbin/ip link set $INTERFACE up
+ExecStart=/usr/sbin/iw reg set US
+# Power save must be off in AP mode or the radio sleeps and the
+# SSID becomes invisible to clients.
+ExecStart=/usr/sbin/iw dev $INTERFACE set power_save off
+# The driver otherwise reports a bogus 31 dBm and won't transmit properly.
+ExecStart=/usr/sbin/iw dev $INTERFACE set txpower fixed 2000
 ExecStart=/usr/sbin/ip addr replace $AP_IP/24 dev $INTERFACE
 
 [Install]
